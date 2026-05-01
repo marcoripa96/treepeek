@@ -8,6 +8,7 @@ import { readFileSafe } from "./file.ts";
 import { getTailscaleIPv4, getLanIPv4 } from "./network.ts";
 import { ICON_SVG, SERVICE_WORKER_JS, buildManifest } from "./assets.ts";
 import { CLIENT_HTML, CLIENT_CSS, CLIENT_JS } from "./generated/client-bundle.ts";
+import { startCloudflaredQuickTunnel, type TunnelHandle } from "./tunnel.ts";
 
 interface CliOptions {
   port: number;
@@ -16,6 +17,7 @@ interface CliOptions {
   token: string | undefined;
   rotateToken: boolean;
   noQr: boolean;
+  tunnel: boolean;
   help: boolean;
 }
 
@@ -27,6 +29,7 @@ function parseArgs(argv: string[]): CliOptions {
     token: undefined,
     rotateToken: false,
     noQr: false,
+    tunnel: false,
     help: false,
   };
   for (let i = 0; i < argv.length; i++) {
@@ -38,6 +41,7 @@ function parseArgs(argv: string[]): CliOptions {
     else if (a === "--token") opts.token = argv[++i];
     else if (a === "--rotate-token") opts.rotateToken = true;
     else if (a === "--no-qr") opts.noQr = true;
+    else if (a === "--tunnel" || a === "-t") opts.tunnel = true;
     else if (a.startsWith("-")) console.warn(`treepeek: unknown flag ${a}`);
   }
   return opts;
@@ -56,6 +60,8 @@ Options:
       --token <s>      Use a specific token (else loaded/generated)
       --rotate-token   Force a fresh token
       --no-qr          Don't print the QR code
+  -t, --tunnel         Expose a public HTTPS URL via Cloudflare quick tunnel
+                       (requires \`cloudflared\` in PATH; binds to 127.0.0.1)
   -h, --help           Show this help
 `);
 }
@@ -91,7 +97,10 @@ async function start() {
 
   let bind = opts.bind;
   let bindReason = "explicit";
-  if (!bind) {
+  if (opts.tunnel && !bind) {
+    bind = "127.0.0.1";
+    bindReason = "tunnel mode (loopback)";
+  } else if (!bind) {
     const ts = getTailscaleIPv4();
     if (ts) {
       bind = ts;
@@ -179,15 +188,37 @@ async function start() {
     },
   });
 
-  const displayHost =
-    bind === "0.0.0.0" || bind === "::"
-      ? getTailscaleIPv4() ?? getLanIPv4() ?? "127.0.0.1"
-      : bind;
-  const shareUrl = `http://${displayHost}:${server.port}/?k=${token}`;
+  let tunnel: TunnelHandle | null = null;
+  let shareUrl: string;
+  let originLabel: string;
 
-  console.log(``);
-  console.log(`  treepeek  ${rootName}`);
-  console.log(`  bind:     ${bind}:${server.port}  (${bindReason})`);
+  if (opts.tunnel) {
+    const localUrl = `http://${bind === "0.0.0.0" || bind === "::" ? "127.0.0.1" : bind}:${server.port}`;
+    console.log(``);
+    console.log(`  treepeek  ${rootName}`);
+    console.log(`  bind:     ${bind}:${server.port}  (${bindReason})`);
+    console.log(`  tunnel:   starting cloudflared quick tunnel ...`);
+    try {
+      tunnel = await startCloudflaredQuickTunnel(localUrl);
+    } catch (err) {
+      console.error(`\n[treepeek] tunnel failed: ${(err as Error).message}`);
+      server.stop(true);
+      process.exit(1);
+    }
+    shareUrl = `${tunnel.url}/?k=${token}`;
+    originLabel = tunnel.url;
+  } else {
+    const displayHost =
+      bind === "0.0.0.0" || bind === "::"
+        ? getTailscaleIPv4() ?? getLanIPv4() ?? "127.0.0.1"
+        : bind;
+    shareUrl = `http://${displayHost}:${server.port}/?k=${token}`;
+    originLabel = `http://${displayHost}:${server.port}`;
+    console.log(``);
+    console.log(`  treepeek  ${rootName}`);
+    console.log(`  bind:     ${bind}:${server.port}  (${bindReason})`);
+  }
+
   console.log(``);
   console.log(`  open on your phone:`);
   console.log(`    \x1b[36m${shareUrl}\x1b[0m`);
@@ -197,8 +228,20 @@ async function start() {
       for (const line of s.split("\n")) console.log("  " + line);
     });
   }
+  if (opts.tunnel) {
+    console.log(`  origin:   ${originLabel}  (Cloudflare quick tunnel)`);
+  }
   console.log(`  ctrl-c to stop`);
   console.log(``);
+
+  const shutdown = async (sig: string) => {
+    console.log(`\n[treepeek] caught ${sig}, shutting down ...`);
+    if (tunnel) await tunnel.stop();
+    server.stop(true);
+    process.exit(0);
+  };
+  process.on("SIGINT", () => void shutdown("SIGINT"));
+  process.on("SIGTERM", () => void shutdown("SIGTERM"));
 }
 
 start().catch((err) => {
