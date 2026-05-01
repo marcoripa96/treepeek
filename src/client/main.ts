@@ -25,6 +25,7 @@ interface FileResponse {
 const statusEl = document.getElementById("status") as HTMLElement;
 const treeEl = document.getElementById("tree") as HTMLElement;
 const toolbarPathEl = document.querySelector(".toolbar-path") as HTMLElement;
+const pullEl = document.getElementById("pull") as HTMLElement;
 const sheetEl = document.getElementById("sheet") as HTMLElement;
 const backdropEl = document.getElementById("sheet-backdrop") as HTMLElement;
 const sheetBody = sheetEl.querySelector(".sheet-body") as HTMLElement;
@@ -189,24 +190,137 @@ function setToolbarPath(displayRoot: string) {
   toolbarPathEl.append(parentSpan, baseSpan);
 }
 
-async function bootstrap() {
-  setStatus("Loading…");
-  let data: TreeResponse;
+async function fetchTree(): Promise<TreeResponse | null> {
   try {
-    const res = await fetch("/api/tree");
-    if (!res.ok) {
-      setStatus(`Error ${res.status}`);
+    const res = await fetch("/api/tree", { cache: "no-store" });
+    if (!res.ok) return null;
+    return (await res.json()) as TreeResponse;
+  } catch {
+    return null;
+  }
+}
+
+let tree: FileTree | null = null;
+
+async function refreshTree(): Promise<boolean> {
+  const data = await fetchTree();
+  if (!data || !tree) return false;
+  setToolbarPath(data.displayRoot);
+  tree.resetPaths(data.paths);
+  tree.setGitStatus(data.gitStatus ?? []);
+  return true;
+}
+
+const PULL_THRESHOLD = 70;
+const PULL_MAX = 120;
+
+let pullStartY = 0;
+let pullDistance = 0;
+let pullActive = false;
+let refreshing = false;
+
+function getTreeScrollTop(): number {
+  const root = (treeEl as HTMLElement & { shadowRoot: ShadowRoot | null }).shadowRoot;
+  if (!root) return 0;
+  const list = root.querySelector("[data-file-tree-virtualized-list]") as HTMLElement | null;
+  return list?.scrollTop ?? 0;
+}
+
+function isInSheet(target: EventTarget | null): boolean {
+  let el = target as Node | null;
+  while (el) {
+    if (el instanceof HTMLElement && (el.id === "sheet" || el.id === "sheet-backdrop")) {
+      return true;
+    }
+    el = el.parentNode;
+  }
+  return false;
+}
+
+function setPullVisual(distance: number, ready: boolean) {
+  pullEl.style.opacity = String(Math.min(distance / PULL_THRESHOLD, 1));
+  pullEl.style.transform = `translateY(${Math.min(distance, PULL_MAX)}px)`;
+  pullEl.classList.toggle("ready", ready);
+}
+
+function resetPullVisual() {
+  pullEl.style.transform = "";
+  pullEl.style.opacity = "";
+  pullEl.classList.remove("ready");
+}
+
+document.addEventListener(
+  "touchstart",
+  (e) => {
+    if (refreshing) return;
+    if (sheetEl.classList.contains("open")) return;
+    if (isInSheet(e.target)) return;
+    if (getTreeScrollTop() > 0) return;
+    if (e.touches.length !== 1) return;
+    pullStartY = e.touches[0]!.clientY;
+    pullDistance = 0;
+    pullActive = true;
+  },
+  { passive: true }
+);
+
+document.addEventListener(
+  "touchmove",
+  (e) => {
+    if (!pullActive || refreshing) return;
+    const dy = e.touches[0]!.clientY - pullStartY;
+    if (dy <= 0) {
+      pullDistance = 0;
+      resetPullVisual();
       return;
     }
-    data = await res.json();
-  } catch {
+    if (getTreeScrollTop() > 0) {
+      pullActive = false;
+      resetPullVisual();
+      return;
+    }
+    pullDistance = dy * 0.55;
+    setPullVisual(pullDistance, pullDistance >= PULL_THRESHOLD);
+  },
+  { passive: true }
+);
+
+async function endPull() {
+  if (!pullActive) return;
+  pullActive = false;
+  if (pullDistance >= PULL_THRESHOLD) {
+    refreshing = true;
+    pullEl.classList.add("refreshing");
+    pullEl.style.transform = "translateY(24px)";
+    pullEl.style.opacity = "1";
+    pullEl.style.setProperty("--pull-y", "24px");
+    const startedAt = Date.now();
+    await refreshTree();
+    const elapsed = Date.now() - startedAt;
+    if (elapsed < 500) await new Promise((r) => setTimeout(r, 500 - elapsed));
+    pullEl.classList.remove("refreshing");
+    resetPullVisual();
+    refreshing = false;
+  } else {
+    resetPullVisual();
+  }
+  pullDistance = 0;
+}
+
+document.addEventListener("touchend", endPull);
+document.addEventListener("touchcancel", endPull);
+
+async function bootstrap() {
+  setStatus("Loading…");
+  const data = await fetchTree();
+  if (!data) {
     setStatus("Failed to load tree.");
     return;
   }
 
   setToolbarPath(data.displayRoot);
 
-  const tree = new FileTree({
+  tree = new FileTree({
     paths: data.paths,
     initialExpansion: "open",
     search: true,
@@ -234,6 +348,42 @@ async function bootstrap() {
   if ("serviceWorker" in navigator) {
     navigator.serviceWorker.register("/sw.js").catch(() => {});
   }
+
+  connectLiveSocket();
+}
+
+let liveBackoff = 500;
+function connectLiveSocket() {
+  const proto = location.protocol === "https:" ? "wss:" : "ws:";
+  const url = `${proto}//${location.host}/ws`;
+  let ws: WebSocket;
+  try {
+    ws = new WebSocket(url);
+  } catch {
+    scheduleReconnect();
+    return;
+  }
+  ws.addEventListener("open", () => {
+    liveBackoff = 500;
+  });
+  ws.addEventListener("message", (event) => {
+    try {
+      const data = JSON.parse(event.data as string) as { type?: string };
+      if (data.type === "changed") {
+        void refreshTree();
+      }
+    } catch {}
+  });
+  ws.addEventListener("close", scheduleReconnect);
+  ws.addEventListener("error", () => {
+    try {
+      ws.close();
+    } catch {}
+  });
+}
+function scheduleReconnect() {
+  setTimeout(connectLiveSocket, liveBackoff);
+  liveBackoff = Math.min(liveBackoff * 2, 10_000);
 }
 
 bootstrap();

@@ -10,6 +10,8 @@ import { ICON_SVG, ICON_PNG_192, ICON_PNG_512, SERVICE_WORKER_JS, buildManifest 
 import { CLIENT_HTML, CLIENT_CSS, CLIENT_JS } from "./generated/client-bundle.ts";
 import { startCloudflaredQuickTunnel, startTailscaleFunnel, type TunnelHandle } from "./tunnel.ts";
 import { getGitStatus, type GitStatusEntry } from "./git.ts";
+import { startWatcher } from "./watcher.ts";
+import type { ServerWebSocket } from "bun";
 
 interface CliOptions {
   port: number;
@@ -132,7 +134,20 @@ async function start() {
     }
   }
 
+  const sockets = new Set<ServerWebSocket<unknown>>();
+  function broadcast(payload: object) {
+    const msg = JSON.stringify(payload);
+    for (const ws of sockets) {
+      try {
+        ws.send(msg);
+      } catch {}
+    }
+  }
+
   let cache: TreeCache | null = null;
+  function invalidateTreeCache() {
+    cache = null;
+  }
   async function getTree() {
     const now = Date.now();
     if (cache && now - cache.at < TREE_CACHE_TTL_MS) return cache.data;
@@ -160,9 +175,26 @@ async function start() {
       console.error("[treepeek] error:", err);
       return new Response("Internal error", { status: 500 });
     },
-    async fetch(req) {
+    websocket: {
+      open(ws) {
+        sockets.add(ws);
+      },
+      close(ws) {
+        sockets.delete(ws);
+      },
+      message() {},
+    },
+    async fetch(req, server) {
       const url = new URL(req.url);
       const path = url.pathname;
+
+      if (path === "/ws") {
+        if (!isAuthenticated(req, token)) {
+          return new Response("unauthorized", { status: 401 });
+        }
+        if (server.upgrade(req)) return;
+        return new Response("expected websocket upgrade", { status: 426 });
+      }
 
       if (path === "/icon.svg") {
         return new Response(ICON_SVG, {
@@ -230,6 +262,14 @@ async function start() {
     },
   });
 
+  const watcher = startWatcher(root, {
+    includeAll: opts.all,
+    onChange: () => {
+      invalidateTreeCache();
+      broadcast({ type: "changed" });
+    },
+  });
+
   let tunnel: TunnelHandle | null = null;
   let shareUrl: string;
   let originLabel: string;
@@ -293,6 +333,7 @@ async function start() {
 
   const shutdown = async (sig: string) => {
     console.log(`\n[treepeek] caught ${sig}, shutting down ...`);
+    watcher.stop();
     if (tunnel) await tunnel.stop();
     server.stop(true);
     process.exit(0);
