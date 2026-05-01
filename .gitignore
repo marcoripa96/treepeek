@@ -2,5 +2,6 @@ node_modules/
 treepeek
 dist/
 src/generated/client-bundle.ts
+src/generated/icons.ts
 *.log
 .DS_Store

@@ -1,38 +1,31 @@
-export const ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 192 192">
-  <rect width="192" height="192" rx="36" fill="#ffffff"/>
-  <g fill="none" stroke="#0284c7" stroke-width="10" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M40 56h44l10 12h58v76H40z"/>
-    <path d="M40 56v-8h32l8 8"/>
-  </g>
-  <g fill="#0284c7">
-    <circle cx="76" cy="116" r="5"/>
-    <circle cx="100" cy="116" r="5"/>
-    <circle cx="124" cy="116" r="5"/>
-  </g>
-</svg>
-`;
+import { ICON_SVG_RAW, ICON_PNG_192_B64, ICON_PNG_512_B64 } from "./generated/icons.ts";
+
+export const ICON_SVG = ICON_SVG_RAW;
+export const ICON_PNG_192 = Buffer.from(ICON_PNG_192_B64, "base64");
+export const ICON_PNG_512 = Buffer.from(ICON_PNG_512_B64, "base64");
 
 export function buildManifest(name: string): string {
   return JSON.stringify({
     name: `treepeek · ${name}`,
     short_name: "treepeek",
-    description: "Browse a remote folder over Tailscale.",
+    description: "Browse a remote folder.",
     start_url: "/",
     scope: "/",
     display: "standalone",
     orientation: "any",
-    background_color: "#ffffff",
+    background_color: "#0284c7",
     theme_color: "#ffffff",
     icons: [
       { src: "/icon.svg", sizes: "any", type: "image/svg+xml", purpose: "any" },
-      { src: "/icon.svg", sizes: "any", type: "image/svg+xml", purpose: "maskable" },
+      { src: "/icon-192.png", sizes: "192x192", type: "image/png", purpose: "any maskable" },
+      { src: "/icon-512.png", sizes: "512x512", type: "image/png", purpose: "any maskable" },
     ],
   });
 }
 
 export const SERVICE_WORKER_JS = `
-const CACHE = 'treepeek-v3';
-const SHELL = ['/', '/manifest.webmanifest', '/icon.svg', '/client.js', '/styles.css'];
+const CACHE = 'treepeek-v4';
+const SHELL = ['/', '/manifest.webmanifest', '/icon.svg', '/icon-192.png', '/icon-512.png', '/client.js', '/styles.css'];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).catch(() => {}));

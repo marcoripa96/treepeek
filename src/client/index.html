@@ -9,11 +9,15 @@
   <meta name="apple-mobile-web-app-title" content="treepeek" />
   <link rel="manifest" href="/manifest.webmanifest" />
   <link rel="icon" type="image/svg+xml" href="/icon.svg" />
-  <link rel="apple-touch-icon" href="/icon.svg" />
+  <link rel="apple-touch-icon" sizes="192x192" href="/icon-192.png" />
+  <link rel="apple-touch-icon" sizes="512x512" href="/icon-512.png" />
   <link rel="stylesheet" href="/styles.css" />
   <title>treepeek</title>
 </head>
 <body>
+  <header id="toolbar">
+    <div class="toolbar-path" aria-label="current directory"></div>
+  </header>
   <main id="tree"></main>
   <div id="status">Loading…</div>
   <div id="sheet-backdrop"></div>

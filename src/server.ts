@@ -6,7 +6,7 @@ import { isAuthenticated, buildCookieHeader, loadOrCreateToken } from "./auth.ts
 import { walk } from "./walker.ts";
 import { readFileSafe } from "./file.ts";
 import { getTailscaleIPv4, getLanIPv4 } from "./network.ts";
-import { ICON_SVG, SERVICE_WORKER_JS, buildManifest } from "./assets.ts";
+import { ICON_SVG, ICON_PNG_192, ICON_PNG_512, SERVICE_WORKER_JS, buildManifest } from "./assets.ts";
 import { CLIENT_HTML, CLIENT_CSS, CLIENT_JS } from "./generated/client-bundle.ts";
 import { startCloudflaredQuickTunnel, startTailscaleFunnel, type TunnelHandle } from "./tunnel.ts";
 import { getGitStatus, type GitStatusEntry } from "./git.ts";
@@ -77,6 +77,8 @@ interface TreeCache {
   at: number;
   data: {
     root: string;
+    absoluteRoot: string;
+    displayRoot: string;
     paths: string[];
     truncated: boolean;
     count: number;
@@ -104,6 +106,8 @@ async function start() {
 
   const root = resolve(process.cwd());
   const rootName = basename(root);
+  const home = process.env.HOME ?? "";
+  const displayRoot = home && (root === home || root.startsWith(home + "/")) ? "~" + root.slice(home.length) : root;
   const token = await loadOrCreateToken({ rotate: opts.rotateToken, override: opts.token });
   const manifest = buildManifest(rootName);
 
@@ -138,6 +142,8 @@ async function start() {
     ]);
     const data = {
       root: rootName,
+      absoluteRoot: root,
+      displayRoot,
       paths: walked.paths,
       truncated: walked.truncated,
       count: walked.count,
@@ -161,6 +167,16 @@ async function start() {
       if (path === "/icon.svg") {
         return new Response(ICON_SVG, {
           headers: { "content-type": "image/svg+xml", "cache-control": "public, max-age=86400" },
+        });
+      }
+      if (path === "/icon-192.png") {
+        return new Response(ICON_PNG_192, {
+          headers: { "content-type": "image/png", "cache-control": "public, max-age=86400" },
+        });
+      }
+      if (path === "/icon-512.png") {
+        return new Response(ICON_PNG_512, {
+          headers: { "content-type": "image/png", "cache-control": "public, max-age=86400" },
         });
       }
       if (path === "/manifest.webmanifest") {

@@ -3,6 +3,8 @@ import { highlight } from "./highlight.ts";
 
 interface TreeResponse {
   root: string;
+  absoluteRoot: string;
+  displayRoot: string;
   paths: string[];
   truncated: boolean;
   count: number;
@@ -22,6 +24,7 @@ interface FileResponse {
 
 const statusEl = document.getElementById("status") as HTMLElement;
 const treeEl = document.getElementById("tree") as HTMLElement;
+const toolbarPathEl = document.querySelector(".toolbar-path") as HTMLElement;
 const sheetEl = document.getElementById("sheet") as HTMLElement;
 const backdropEl = document.getElementById("sheet-backdrop") as HTMLElement;
 const sheetBody = sheetEl.querySelector(".sheet-body") as HTMLElement;
@@ -91,7 +94,16 @@ function renderError(msg: string) {
 function renderText(content: string, path: string) {
   sheetBody.innerHTML = "";
   const pre = document.createElement("pre");
-  pre.textContent = content;
+  pre.className = "plain";
+  const code = document.createElement("code");
+  const lines = content.split("\n");
+  for (const line of lines) {
+    const span = document.createElement("span");
+    span.className = "line";
+    span.textContent = line || "​";
+    code.appendChild(span);
+  }
+  pre.appendChild(code);
   sheetBody.appendChild(pre);
   sheetBody.scrollTop = 0;
 
@@ -160,6 +172,23 @@ async function openFile(path: string) {
   }
 }
 
+function setToolbarPath(displayRoot: string) {
+  toolbarPathEl.innerHTML = "";
+  const slash = displayRoot.lastIndexOf("/");
+  if (slash <= 0 || slash === displayRoot.length - 1) {
+    toolbarPathEl.textContent = displayRoot;
+    return;
+  }
+  const parent = displayRoot.slice(0, slash + 1);
+  const base = displayRoot.slice(slash + 1);
+  const parentSpan = document.createElement("span");
+  parentSpan.textContent = parent;
+  const baseSpan = document.createElement("span");
+  baseSpan.className = "basename";
+  baseSpan.textContent = base;
+  toolbarPathEl.append(parentSpan, baseSpan);
+}
+
 async function bootstrap() {
   setStatus("Loading…");
   let data: TreeResponse;
@@ -174,6 +203,8 @@ async function bootstrap() {
     setStatus("Failed to load tree.");
     return;
   }
+
+  setToolbarPath(data.displayRoot);
 
   const tree = new FileTree({
     paths: data.paths,

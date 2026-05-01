@@ -33,11 +33,37 @@ body {
   overflow: hidden;
 }
 
+#toolbar {
+  flex-shrink: 0;
+  padding: calc(var(--safe-top) + 8px) 14px 8px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+  display: flex;
+  align-items: center;
+  min-height: 36px;
+}
+.toolbar-path {
+  flex: 1;
+  min-width: 0;
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 13px;
+  color: var(--fg-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  direction: rtl;
+  text-align: left;
+  text-overflow: ellipsis;
+  unicode-bidi: plaintext;
+}
+.toolbar-path .basename {
+  color: var(--fg);
+  font-weight: 600;
+}
+
 #tree {
   flex: 1;
   min-height: 0;
   width: 100%;
-  padding-top: var(--safe-top);
 }
 
 #status {
@@ -150,7 +176,7 @@ body {
 .sheet-body pre,
 .sheet-body pre.shiki {
   margin: 0;
-  padding: 14px 16px;
+  padding: 14px 16px 14px 8px;
   font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   font-size: 14px;
   line-height: 1.6;
@@ -159,8 +185,35 @@ body {
   tab-size: 2;
   background: var(--bg-elev) !important;
 }
-.sheet-body pre.shiki code {
+.sheet-body pre.shiki code,
+.sheet-body pre.plain code {
+  counter-reset: line;
+  display: block;
   font: inherit;
+}
+.sheet-body pre.shiki .line,
+.sheet-body pre.plain .line {
+  counter-increment: line;
+  display: block;
+  position: relative;
+  padding-left: 3.6em;
+  min-height: 1.6em;
+}
+.sheet-body pre.shiki .line::before,
+.sheet-body pre.plain .line::before {
+  content: counter(line);
+  position: absolute;
+  left: 0;
+  width: 2.8em;
+  text-align: right;
+  color: var(--fg-dim);
+  user-select: none;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.55;
+  padding-right: 0.6em;
+  border-right: 1px solid var(--border);
+  margin-right: 0.6em;
+  box-sizing: border-box;
 }
 .sheet-body img {
   display: block;
