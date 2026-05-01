@@ -24,36 +24,66 @@ export function buildManifest(name: string): string {
 }
 
 export const SERVICE_WORKER_JS = `
-const CACHE = 'treepeek-v7';
-const SHELL = ['/', '/manifest.webmanifest', '/icon.svg', '/icon-192.png', '/icon-512.png', '/client.js', '/styles.css'];
+const CACHE = 'treepeek-v8';
+const STATIC = new Set([
+  '/icon.svg',
+  '/icon-192.png',
+  '/icon-512.png',
+  '/manifest.webmanifest',
+]);
 
 self.addEventListener('install', (event) => {
-  event.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).catch(() => {}));
+  event.waitUntil(caches.open(CACHE).then((c) => c.addAll([...STATIC])).catch(() => {}));
   self.skipWaiting();
 });
 
 self.addEventListener('activate', (event) => {
-  event.waitUntil(
-    caches.keys().then((keys) => Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k))))
-  );
-  self.clients.claim();
+  event.waitUntil((async () => {
+    const keys = await caches.keys();
+    await Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k)));
+    await self.clients.claim();
+    const clients = await self.clients.matchAll({ type: 'window' });
+    for (const client of clients) {
+      try { client.postMessage({ type: 'sw-activated', cache: CACHE }); } catch {}
+    }
+  })());
 });
 
 self.addEventListener('fetch', (event) => {
-  const url = new URL(event.request.url);
   if (event.request.method !== 'GET') return;
+  const url = new URL(event.request.url);
+  if (url.origin !== self.location.origin) return;
   if (url.pathname.startsWith('/api/')) return;
-  event.respondWith(
-    caches.match(event.request).then((hit) => {
-      if (hit) return hit;
-      return fetch(event.request).then((resp) => {
+  if (url.pathname === '/ws') return;
+
+  if (STATIC.has(url.pathname)) {
+    event.respondWith(
+      caches.match(event.request).then((hit) => hit || fetch(event.request).then((resp) => {
         if (resp.ok) {
           const clone = resp.clone();
           caches.open(CACHE).then((c) => c.put(event.request, clone)).catch(() => {});
         }
         return resp;
-      }).catch(() => caches.match('/'));
-    })
-  );
+      }))
+    );
+    return;
+  }
+
+  event.respondWith((async () => {
+    try {
+      const resp = await fetch(event.request);
+      if (resp.ok) {
+        const clone = resp.clone();
+        caches.open(CACHE).then((c) => c.put(event.request, clone)).catch(() => {});
+      }
+      return resp;
+    } catch {
+      const hit = await caches.match(event.request);
+      if (hit) return hit;
+      const root = await caches.match('/');
+      if (root) return root;
+      return new Response('offline', { status: 503 });
+    }
+  })());
 });
 `.trimStart();

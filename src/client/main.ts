@@ -352,7 +352,17 @@ async function bootstrap() {
   setStatus(null);
 
   if ("serviceWorker" in navigator) {
-    navigator.serviceWorker.register("/sw.js").catch(() => {});
+    let didReload = false;
+    navigator.serviceWorker.addEventListener("message", (event) => {
+      const data = (event.data ?? null) as { type?: string } | null;
+      if (data?.type === "sw-activated" && !didReload) {
+        didReload = true;
+        location.reload();
+      }
+    });
+    navigator.serviceWorker.register("/sw.js").then((reg) => {
+      reg.update().catch(() => {});
+    }).catch(() => {});
   }
 
   connectLiveSocket();
