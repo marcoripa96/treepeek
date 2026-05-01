@@ -212,44 +212,51 @@ body {
 .sheet-body pre,
 .sheet-body pre.shiki {
   margin: 0;
-  padding: 14px 16px 14px 8px;
+  padding: 14px 0;
   font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   font-size: 14px;
   line-height: 1.6;
-  white-space: pre;
   color: var(--fg);
   tab-size: 2;
   background: var(--bg-elev) !important;
+  white-space: normal;
+  overflow: visible;
 }
 .sheet-body pre.shiki code,
 .sheet-body pre.plain code {
-  counter-reset: line;
-  display: block;
+  display: flex;
+  flex-direction: column;
   font: inherit;
+  width: max-content;
+  min-width: 100%;
 }
 .sheet-body pre.shiki .line,
 .sheet-body pre.plain .line {
-  counter-increment: line;
-  display: block;
-  position: relative;
-  padding-left: 3.6em;
+  display: flex;
+  align-items: flex-start;
   min-height: 1.6em;
 }
-.sheet-body pre.shiki .line::before,
-.sheet-body pre.plain .line::before {
-  content: counter(line);
-  position: absolute;
+.sheet-body .ln-num {
+  position: sticky;
   left: 0;
-  width: 2.8em;
+  flex-shrink: 0;
+  width: 3.4em;
+  padding: 0 0.6em 0 0.4em;
   text-align: right;
   color: var(--fg-dim);
+  background: var(--bg-elev);
+  border-right: 1px solid var(--border);
   user-select: none;
   font-variant-numeric: tabular-nums;
-  opacity: 0.55;
-  padding-right: 0.6em;
-  border-right: 1px solid var(--border);
-  margin-right: 0.6em;
+  opacity: 0.7;
+  z-index: 1;
   box-sizing: border-box;
+}
+.sheet-body .ln-content {
+  flex: 1;
+  padding: 0 16px 0 0.8em;
+  white-space: pre;
+  min-width: 0;
 }
 .sheet-body img {
   display: block;

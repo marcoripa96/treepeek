@@ -98,12 +98,18 @@ function renderText(content: string, path: string) {
   pre.className = "plain";
   const code = document.createElement("code");
   const lines = content.split("\n");
-  for (const line of lines) {
-    const span = document.createElement("span");
-    span.className = "line";
-    span.textContent = line || "​";
-    code.appendChild(span);
-  }
+  lines.forEach((line, i) => {
+    const lineEl = document.createElement("span");
+    lineEl.className = "line";
+    const num = document.createElement("span");
+    num.className = "ln-num";
+    num.textContent = String(i + 1);
+    const body = document.createElement("span");
+    body.className = "ln-content";
+    body.textContent = line.length === 0 ? "​" : line;
+    lineEl.append(num, body);
+    code.appendChild(lineEl);
+  });
   pre.appendChild(code);
   sheetBody.appendChild(pre);
   sheetBody.scrollTop = 0;

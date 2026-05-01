@@ -1,4 +1,4 @@
-import { createHighlighterCoreSync, type HighlighterCore } from "@shikijs/core";
+import { createHighlighterCoreSync, type HighlighterCore, type ShikiTransformer } from "@shikijs/core";
 import { createJavaScriptRegexEngine } from "@shikijs/engine-javascript";
 import githubLight from "@shikijs/themes/github-light";
 
@@ -106,11 +106,36 @@ export function detectLang(path: string): string | null {
   return EXT_TO_LANG[filename.slice(dot).toLowerCase()] ?? null;
 }
 
+const lineNumberTransformer: ShikiTransformer = {
+  name: "treepeek:line-numbers",
+  line(node, line) {
+    const original = node.children;
+    node.children = [
+      {
+        type: "element",
+        tagName: "span",
+        properties: { class: "ln-num" },
+        children: [{ type: "text", value: String(line) }],
+      },
+      {
+        type: "element",
+        tagName: "span",
+        properties: { class: "ln-content" },
+        children: original,
+      },
+    ];
+  },
+};
+
 export function highlight(code: string, path: string): string | null {
   const lang = detectLang(path);
   if (!lang) return null;
   try {
-    return getHighlighter().codeToHtml(code, { lang, theme: THEME_NAME });
+    return getHighlighter().codeToHtml(code, {
+      lang,
+      theme: THEME_NAME,
+      transformers: [lineNumberTransformer],
+    });
   } catch {
     return null;
   }
