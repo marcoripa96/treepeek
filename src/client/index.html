@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#0b0d10" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="treepeek" />
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <link rel="icon" type="image/svg+xml" href="/icon.svg" />
+  <link rel="apple-touch-icon" href="/icon.svg" />
+  <link rel="stylesheet" href="/styles.css" />
+  <title>treepeek</title>
+</head>
+<body>
+  <main id="tree"></main>
+  <div id="status">Loading…</div>
+  <div id="sheet-backdrop"></div>
+  <aside id="sheet" aria-hidden="true">
+    <div class="sheet-handle" aria-label="Drag to dismiss"></div>
+    <header class="sheet-header">
+      <div class="sheet-title"></div>
+      <div class="sheet-meta"></div>
+      <button class="sheet-close" aria-label="Close">×</button>
+    </header>
+    <div class="sheet-body"></div>
+  </aside>
+  <script type="module" src="/client.js"></script>
+</body>
+</html>

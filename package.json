@@ -1,0 +1,24 @@
+{
+  "name": "treepeek",
+  "version": "0.1.0",
+  "description": "Single-binary Bun server that exposes the current directory as a mobile-first installable PWA file browser, protected with a token URL.",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "treepeek": "./treepeek"
+  },
+  "scripts": {
+    "dev": "bun run src/server.ts",
+    "build": "bun run scripts/build.ts",
+    "start": "./treepeek"
+  },
+  "dependencies": {
+    "@pierre/trees": "1.0.0-beta.3",
+    "qrcode-terminal": "^0.12.0"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "@types/qrcode-terminal": "^0.12.2",
+    "typescript": "^5.6.0"
+  }
+}

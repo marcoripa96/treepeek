@@ -1,0 +1,6 @@
+node_modules/
+treepeek
+dist/
+src/generated/client-bundle.ts
+*.log
+.DS_Store
