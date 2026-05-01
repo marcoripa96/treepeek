@@ -1,10 +1,12 @@
-import { FileTree } from "@pierre/trees";
+import { FileTree, type GitStatusEntry } from "@pierre/trees";
+import { highlight } from "./highlight.ts";
 
 interface TreeResponse {
   root: string;
   paths: string[];
   truncated: boolean;
   count: number;
+  gitStatus: GitStatusEntry[] | null;
 }
 
 interface FileResponse {
@@ -86,12 +88,20 @@ function renderError(msg: string) {
   sheetBody.appendChild(div);
 }
 
-function renderText(content: string) {
+function renderText(content: string, path: string) {
   sheetBody.innerHTML = "";
   const pre = document.createElement("pre");
   pre.textContent = content;
   sheetBody.appendChild(pre);
   sheetBody.scrollTop = 0;
+
+  queueMicrotask(() => {
+    const html = highlight(content, path);
+    if (html) {
+      sheetBody.innerHTML = html;
+      sheetBody.scrollTop = 0;
+    }
+  });
 }
 
 function renderImage(mime: string, base64: string) {
@@ -139,7 +149,7 @@ async function openFile(path: string) {
     } else if (data.isBinary) {
       renderUnsupported(data.reason ?? "Binary file — preview unavailable.", data.size);
     } else if (data.encoding === "utf8" && data.content !== null) {
-      renderText(data.content);
+      renderText(data.content, path);
     } else {
       renderUnsupported("Preview unavailable.", data.size);
     }
@@ -171,6 +181,7 @@ async function bootstrap() {
     search: true,
     flattenEmptyDirectories: true,
     density: "relaxed",
+    gitStatus: data.gitStatus ?? undefined,
   });
   treeEl.classList.add("tp-tree-host");
   tree.render({ containerWrapper: treeEl });

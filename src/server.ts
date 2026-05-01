@@ -8,7 +8,8 @@ import { readFileSafe } from "./file.ts";
 import { getTailscaleIPv4, getLanIPv4 } from "./network.ts";
 import { ICON_SVG, SERVICE_WORKER_JS, buildManifest } from "./assets.ts";
 import { CLIENT_HTML, CLIENT_CSS, CLIENT_JS } from "./generated/client-bundle.ts";
-import { startCloudflaredQuickTunnel, type TunnelHandle } from "./tunnel.ts";
+import { startCloudflaredQuickTunnel, startTailscaleFunnel, type TunnelHandle } from "./tunnel.ts";
+import { getGitStatus, type GitStatusEntry } from "./git.ts";
 
 interface CliOptions {
   port: number;
@@ -18,6 +19,7 @@ interface CliOptions {
   rotateToken: boolean;
   noQr: boolean;
   tunnel: boolean;
+  funnel: boolean;
   help: boolean;
 }
 
@@ -30,6 +32,7 @@ function parseArgs(argv: string[]): CliOptions {
     rotateToken: false,
     noQr: false,
     tunnel: false,
+    funnel: false,
     help: false,
   };
   for (let i = 0; i < argv.length; i++) {
@@ -42,6 +45,7 @@ function parseArgs(argv: string[]): CliOptions {
     else if (a === "--rotate-token") opts.rotateToken = true;
     else if (a === "--no-qr") opts.noQr = true;
     else if (a === "--tunnel" || a === "-t") opts.tunnel = true;
+    else if (a === "--funnel" || a === "-f") opts.funnel = true;
     else if (a.startsWith("-")) console.warn(`treepeek: unknown flag ${a}`);
   }
   return opts;
@@ -60,8 +64,10 @@ Options:
       --token <s>      Use a specific token (else loaded/generated)
       --rotate-token   Force a fresh token
       --no-qr          Don't print the QR code
-  -t, --tunnel         Expose a public HTTPS URL via Cloudflare quick tunnel
-                       (requires \`cloudflared\` in PATH; binds to 127.0.0.1)
+  -t, --tunnel         Ephemeral public HTTPS URL via Cloudflare quick tunnel
+                       (random *.trycloudflare.com per run; binds to 127.0.0.1)
+  -f, --funnel         Stable public HTTPS URL via Tailscale Funnel
+                       (https://<host>.<tailnet>.ts.net; binds to 127.0.0.1)
   -h, --help           Show this help
 `);
 }
@@ -69,7 +75,13 @@ Options:
 const TREE_CACHE_TTL_MS = 5_000;
 interface TreeCache {
   at: number;
-  data: { root: string; paths: string[]; truncated: boolean; count: number };
+  data: {
+    root: string;
+    paths: string[];
+    truncated: boolean;
+    count: number;
+    gitStatus: GitStatusEntry[] | null;
+  };
 }
 
 function unauthorized(req: Request): Response {
@@ -95,11 +107,16 @@ async function start() {
   const token = await loadOrCreateToken({ rotate: opts.rotateToken, override: opts.token });
   const manifest = buildManifest(rootName);
 
+  if (opts.tunnel && opts.funnel) {
+    console.error("[treepeek] --tunnel and --funnel are mutually exclusive");
+    process.exit(2);
+  }
+
   let bind = opts.bind;
   let bindReason = "explicit";
-  if (opts.tunnel && !bind) {
+  if ((opts.tunnel || opts.funnel) && !bind) {
     bind = "127.0.0.1";
-    bindReason = "tunnel mode (loopback)";
+    bindReason = (opts.tunnel ? "tunnel" : "funnel") + " mode (loopback)";
   } else if (!bind) {
     const ts = getTailscaleIPv4();
     if (ts) {
@@ -115,8 +132,17 @@ async function start() {
   async function getTree() {
     const now = Date.now();
     if (cache && now - cache.at < TREE_CACHE_TTL_MS) return cache.data;
-    const result = await walk({ root, includeAll: opts.all });
-    const data = { root: rootName, paths: result.paths, truncated: result.truncated, count: result.count };
+    const [walked, gitStatus] = await Promise.all([
+      walk({ root, includeAll: opts.all }),
+      getGitStatus(root),
+    ]);
+    const data = {
+      root: rootName,
+      paths: walked.paths,
+      truncated: walked.truncated,
+      count: walked.count,
+      gitStatus,
+    };
     cache = { at: now, data };
     return data;
   }
@@ -206,7 +232,22 @@ async function start() {
       process.exit(1);
     }
     shareUrl = `${tunnel.url}/?k=${token}`;
-    originLabel = tunnel.url;
+    originLabel = `${tunnel.url}  (Cloudflare quick tunnel)`;
+  } else if (opts.funnel) {
+    console.log(``);
+    console.log(`  treepeek  ${rootName}`);
+    console.log(`  bind:     ${bind}:${server.port}  (${bindReason})`);
+    console.log(`  funnel:   configuring tailscale funnel ...`);
+    try {
+      tunnel = await startTailscaleFunnel(server.port);
+    } catch (err) {
+      console.error(`\n[treepeek] funnel failed: ${(err as Error).message}`);
+      console.error(`  hint: enable Funnel/HTTPS at https://login.tailscale.com/admin/settings`);
+      server.stop(true);
+      process.exit(1);
+    }
+    shareUrl = `${tunnel.url}/?k=${token}`;
+    originLabel = `${tunnel.url}  (Tailscale Funnel)`;
   } else {
     const displayHost =
       bind === "0.0.0.0" || bind === "::"
@@ -228,8 +269,8 @@ async function start() {
       for (const line of s.split("\n")) console.log("  " + line);
     });
   }
-  if (opts.tunnel) {
-    console.log(`  origin:   ${originLabel}  (Cloudflare quick tunnel)`);
+  if (tunnel) {
+    console.log(`  origin:   ${originLabel}`);
   }
   console.log(`  ctrl-c to stop`);
   console.log(``);

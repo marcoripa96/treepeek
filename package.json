@@ -14,7 +14,12 @@
   },
   "dependencies": {
     "@pierre/trees": "1.0.0-beta.3",
-    "qrcode-terminal": "^0.12.0"
+    "@shikijs/core": "^4.0.2",
+    "@shikijs/engine-javascript": "^4.0.2",
+    "@shikijs/langs": "^4.0.2",
+    "@shikijs/themes": "^4.0.2",
+    "qrcode-terminal": "^0.12.0",
+    "shiki": "^4.0.2"
   },
   "devDependencies": {
     "@types/bun": "latest",

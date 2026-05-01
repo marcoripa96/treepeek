@@ -31,7 +31,7 @@ export function buildManifest(name: string): string {
 }
 
 export const SERVICE_WORKER_JS = `
-const CACHE = 'treepeek-v2';
+const CACHE = 'treepeek-v3';
 const SHELL = ['/', '/manifest.webmanifest', '/icon.svg', '/client.js', '/styles.css'];
 
 self.addEventListener('install', (event) => {

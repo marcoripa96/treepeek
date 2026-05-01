@@ -1,6 +1,7 @@
 export interface TunnelHandle {
   url: string;
   stop: () => Promise<void>;
+  kind: "cloudflared" | "tailscale-funnel";
 }
 
 const TRYCLOUDFLARE_URL = /https:\/\/[a-zA-Z0-9-]+\.trycloudflare\.com/;
@@ -66,6 +67,7 @@ export async function startCloudflaredQuickTunnel(localUrl: string): Promise<Tun
 
   return {
     url,
+    kind: "cloudflared",
     stop: async () => {
       try {
         proc.kill("SIGTERM");
@@ -73,6 +75,52 @@ export async function startCloudflaredQuickTunnel(localUrl: string): Promise<Tun
           proc.exited,
           new Promise((r) => setTimeout(r, 2000)),
         ]);
+      } catch {}
+    },
+  };
+}
+
+async function getTailscaleHostname(): Promise<string> {
+  const proc = Bun.spawn({
+    cmd: ["tailscale", "status", "--json"],
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const stdout = await new Response(proc.stdout as ReadableStream<Uint8Array>).text();
+  const code = await proc.exited;
+  if (code !== 0) throw new Error("`tailscale status --json` failed");
+  const data = JSON.parse(stdout) as { Self?: { DNSName?: string } };
+  const dns = data.Self?.DNSName;
+  if (!dns) throw new Error("Tailscale DNSName not found (is MagicDNS enabled?)");
+  return dns.replace(/\.$/, "");
+}
+
+export async function startTailscaleFunnel(port: number): Promise<TunnelHandle> {
+  let hostname: string;
+  try {
+    hostname = await getTailscaleHostname();
+  } catch (err) {
+    throw new Error(`Tailscale not available: ${(err as Error).message}`);
+  }
+
+  const proc = Bun.spawnSync({
+    cmd: ["tailscale", "funnel", "--bg", String(port)],
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  if (!proc.success) {
+    const stderr = new TextDecoder().decode(proc.stderr);
+    const stdout = new TextDecoder().decode(proc.stdout);
+    const msg = (stderr || stdout).trim() || "tailscale funnel failed";
+    throw new Error(msg);
+  }
+
+  return {
+    url: `https://${hostname}`,
+    kind: "tailscale-funnel",
+    stop: async () => {
+      try {
+        Bun.spawnSync({ cmd: ["tailscale", "funnel", "reset"] });
       } catch {}
     },
   };

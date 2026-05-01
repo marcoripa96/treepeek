@@ -147,7 +147,8 @@ body {
   -webkit-overflow-scrolling: touch;
   background: var(--bg-elev);
 }
-.sheet-body pre {
+.sheet-body pre,
+.sheet-body pre.shiki {
   margin: 0;
   padding: 14px 16px;
   font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
@@ -156,6 +157,10 @@ body {
   white-space: pre;
   color: var(--fg);
   tab-size: 2;
+  background: var(--bg-elev) !important;
+}
+.sheet-body pre.shiki code {
+  font: inherit;
 }
 .sheet-body img {
   display: block;
