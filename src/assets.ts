@@ -1,10 +1,10 @@
 export const ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 192 192">
-  <rect width="192" height="192" rx="36" fill="#0b0d10"/>
-  <g fill="none" stroke="#7dd3fc" stroke-width="10" stroke-linecap="round" stroke-linejoin="round">
+  <rect width="192" height="192" rx="36" fill="#ffffff"/>
+  <g fill="none" stroke="#0284c7" stroke-width="10" stroke-linecap="round" stroke-linejoin="round">
     <path d="M40 56h44l10 12h58v76H40z"/>
     <path d="M40 56v-8h32l8 8"/>
   </g>
-  <g fill="#7dd3fc">
+  <g fill="#0284c7">
     <circle cx="76" cy="116" r="5"/>
     <circle cx="100" cy="116" r="5"/>
     <circle cx="124" cy="116" r="5"/>
@@ -21,8 +21,8 @@ export function buildManifest(name: string): string {
     scope: "/",
     display: "standalone",
     orientation: "any",
-    background_color: "#0b0d10",
-    theme_color: "#0b0d10",
+    background_color: "#ffffff",
+    theme_color: "#ffffff",
     icons: [
       { src: "/icon.svg", sizes: "any", type: "image/svg+xml", purpose: "any" },
       { src: "/icon.svg", sizes: "any", type: "image/svg+xml", purpose: "maskable" },
@@ -31,7 +31,7 @@ export function buildManifest(name: string): string {
 }
 
 export const SERVICE_WORKER_JS = `
-const CACHE = 'treepeek-v1';
+const CACHE = 'treepeek-v2';
 const SHELL = ['/', '/manifest.webmanifest', '/icon.svg', '/client.js', '/styles.css'];
 
 self.addEventListener('install', (event) => {

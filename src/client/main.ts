@@ -170,17 +170,23 @@ async function bootstrap() {
     initialExpansion: "open",
     search: true,
     flattenEmptyDirectories: true,
-    onSelectionChange: (selected) => {
-      if (selected.length === 0) return;
-      const path = selected[0]!;
-      const item = tree.getItem(path);
-      if (item && item.kind === "file") {
-        openFile(path);
-      }
-    },
+    density: "relaxed",
   });
   treeEl.classList.add("tp-tree-host");
   tree.render({ containerWrapper: treeEl });
+
+  treeEl.addEventListener("click", (event) => {
+    for (const node of event.composedPath()) {
+      if (!(node instanceof HTMLElement)) continue;
+      const path = node.dataset.itemPath;
+      const type = node.dataset.itemType;
+      if (path && type === "file") {
+        openFile(path);
+        return;
+      }
+    }
+  });
+
   setStatus(null);
 
   if ("serviceWorker" in navigator) {
