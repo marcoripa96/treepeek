@@ -1,7 +1,8 @@
 node_modules/
 treepeek
 dist/
-src/generated/client-bundle.ts
-src/generated/icons.ts
+server/target/
 *.log
+.treepeek-history.sqlite*
 .DS_Store
+.claude/

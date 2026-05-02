@@ -11,30 +11,15 @@
   <link rel="icon" type="image/svg+xml" href="/icon.svg" />
   <link rel="apple-touch-icon" sizes="192x192" href="/icon-192.png" />
   <link rel="apple-touch-icon" sizes="512x512" href="/icon-512.png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Google+Sans+Flex:wght@100..1000&display=swap" onload="this.onload=null;this.rel='stylesheet'" />
+  <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Google+Sans+Flex:wght@100..1000&display=swap" /></noscript>
   <link rel="stylesheet" href="/styles.css" />
   <title>treepeek</title>
 </head>
 <body>
-  <header id="toolbar">
-    <div class="toolbar-path" aria-label="current directory"></div>
-  </header>
-  <main id="tree"></main>
-  <div id="pull">
-    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-      <path d="M12 5v14M5 12l7 7 7-7"/>
-    </svg>
-  </div>
-  <div id="status">Loading…</div>
-  <div id="sheet-backdrop"></div>
-  <aside id="sheet" aria-hidden="true">
-    <div class="sheet-handle" aria-label="Drag to dismiss"></div>
-    <header class="sheet-header">
-      <div class="sheet-title"></div>
-      <div class="sheet-meta"></div>
-      <button class="sheet-close" aria-label="Close">×</button>
-    </header>
-    <div class="sheet-body"></div>
-  </aside>
+  <div id="root"></div>
   <script type="module" src="/client.js"></script>
 </body>
 </html>

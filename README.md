@@ -1,17 +1,19 @@
 # treepeek
 
-Single-binary Bun server that exposes the current directory as a mobile-first installable PWA file browser. Runs over your Tailscale tailnet and is protected by a token URL.
+Single-binary Rust server that exposes the current directory as a mobile-first installable PWA file browser. Runs over your Tailscale tailnet and is protected by a token URL.
 
 Built on top of [`@pierre/trees`](https://trees.software/).
 
 ## Build
+
+Requires Rust (stable) and [Bun](https://bun.sh) (build-time only — bundles the React client).
 
 ```bash
 bun install
 bun run build
 ```
 
-Produces `./treepeek` — a single self-contained executable.
+The build script bundles the React client with Bun, then runs `cargo build --release` and copies the binary to `./treepeek`.
 
 Optionally drop it on your `$PATH`:
 
@@ -88,6 +90,8 @@ Then visit `https://<your-host>.<tailnet>.ts.net/?k=<token>` from your phone.
 
 ```bash
 bun install
-bun run build --no-compile  # regenerate client bundle without compiling binary
-bun run dev                  # run server directly via bun
+bun run build:client          # rebuild only the client bundle into dist/
+bun run dev -- --port 7777    # run the server via cargo (reads dist/ at compile time)
 ```
+
+Server source lives in `server/` (Rust); client source in `src/client/` (React).
