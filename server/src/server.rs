@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -24,8 +24,10 @@ use crate::diff::get_file_diff;
 use crate::file::read_file_safe;
 use crate::git::{self, GitHistoryEntry};
 use crate::history::HistoryStore;
+use crate::outline;
 use crate::push::{is_valid_subscription, PushManager, PushSubscriptionPayload};
 use crate::registry::list_instances;
+use crate::search::SearchService;
 use crate::walker::walk;
 
 const TREE_CACHE_TTL: Duration = Duration::from_millis(5_000);
@@ -43,6 +45,7 @@ pub struct AppState {
     pub history_store: Arc<HistoryStore>,
     pub push_manager: Arc<PushManager>,
     pub vapid_public_key: Option<String>,
+    pub search: Option<Arc<SearchService>>,
     pub server_port: tokio::sync::OnceCell<u16>,
     pub sockets: Mutex<Vec<mpsc::UnboundedSender<String>>>,
     tree_cache: RwLock<Option<(Instant, JsonValue)>>,
@@ -60,6 +63,7 @@ impl AppState {
         history_store: Arc<HistoryStore>,
         push_manager: Arc<PushManager>,
         vapid_public_key: Option<String>,
+        search: Option<Arc<SearchService>>,
     ) -> Arc<Self> {
         Arc::new(Self {
             root,
@@ -71,6 +75,7 @@ impl AppState {
             history_store,
             push_manager,
             vapid_public_key,
+            search,
             server_port: tokio::sync::OnceCell::new(),
             sockets: Mutex::new(Vec::new()),
             tree_cache: RwLock::new(None),
@@ -437,7 +442,9 @@ async fn catch_all(State(state): State<SharedState>, req: Request<Body>) -> Resp
             && (path == "/api/tree"
                 || path == "/api/history"
                 || path == "/api/file"
-                || path == "/api/diff")
+                || path == "/api/diff"
+                || path == "/api/search"
+                || path == "/api/outline")
         {
             return proxy_http(method, &path, &uri, pp, &state.token, cookie_header.as_deref())
                 .await;
@@ -464,13 +471,79 @@ async fn catch_all(State(state): State<SharedState>, req: Request<Body>) -> Resp
             }
         };
         return match read_file_safe(&state.root, &p).await {
-            Some(d) => json_response(&serde_json::to_value(d).unwrap_or(JsonValue::Null)),
+            Some(d) => {
+                if let Some(search) = state.search.as_ref() {
+                    let s = search.clone();
+                    let p2 = p.clone();
+                    tokio::task::spawn_blocking(move || s.track_access(&p2));
+                }
+                json_response(&serde_json::to_value(d).unwrap_or(JsonValue::Null))
+            }
             None => (
                 StatusCode::NOT_FOUND,
                 json_response(&json!({ "error": "not found" })),
             )
                 .into_response(),
         };
+    }
+    if path == "/api/search" {
+        let q = query.get("q").cloned().unwrap_or_default();
+        let limit: usize = query
+            .get("limit")
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(50)
+            .clamp(1, 500);
+        let Some(search) = state.search.clone() else {
+            return json_response(&json!({ "results": [] }));
+        };
+        let hits = tokio::task::spawn_blocking(move || search.search(&q, limit))
+            .await
+            .unwrap_or_default();
+        return json_response(&json!({ "results": hits }));
+    }
+    if path == "/api/outline" {
+        let p = match query.get("p") {
+            Some(p) => p.clone(),
+            None => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    json_response(&json!({ "error": "missing path" })),
+                )
+                    .into_response();
+            }
+        };
+        let file = match read_file_safe(&state.root, &p).await {
+            Some(f) => f,
+            None => {
+                return (
+                    StatusCode::NOT_FOUND,
+                    json_response(&json!({ "error": "not found" })),
+                )
+                    .into_response();
+            }
+        };
+        let Some(content) = file.content.clone() else {
+            return json_response(&json!({ "symbols": [], "links": [] }));
+        };
+        if file.is_binary || file.truncated {
+            return json_response(&json!({ "symbols": [], "links": [] }));
+        }
+        let tree = compute_tree(&state).await;
+        let paths: HashSet<String> = tree
+            .get("paths")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str())
+                    .filter(|s| !s.ends_with('/'))
+                    .map(|s| s.to_string())
+                    .collect()
+            })
+            .unwrap_or_default();
+        let outline = tokio::task::spawn_blocking(move || outline::build(&content, &p, &paths))
+            .await
+            .unwrap_or_default();
+        return json_response(&serde_json::to_value(outline).unwrap_or(JsonValue::Null));
     }
     if path == "/api/diff" {
         let p = match query.get("p") {

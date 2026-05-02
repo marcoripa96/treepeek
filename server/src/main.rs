@@ -5,8 +5,10 @@ mod file;
 mod git;
 mod history;
 mod network;
+mod outline;
 mod push;
 mod registry;
+mod search;
 mod server;
 mod tunnel;
 mod walker;
@@ -26,6 +28,7 @@ use crate::history::HistoryStore;
 use crate::network::{lan_ipv4, tailscale_ipv4};
 use crate::push::{ensure_vapid, PushManager};
 use crate::registry::{register_instance, unregister_instance, InstanceInfo};
+use crate::search::SearchService;
 use crate::server::{build_router, AppState};
 use crate::tunnel::{start_cloudflared_quick_tunnel, start_tailscale_funnel, TunnelHandle};
 
@@ -210,6 +213,15 @@ async fn run(opts: CliOptions) -> Result<(), String> {
         }
     }
 
+    let frecency_db = frecency_db_path(&root);
+    let search = match SearchService::init(&root, frecency_db) {
+        Ok(s) => Some(Arc::new(s)),
+        Err(e) => {
+            eprintln!("[treepeek] search disabled: {}", e);
+            None
+        }
+    };
+
     let state = AppState::new(
         root.clone(),
         root_name.clone(),
@@ -220,6 +232,7 @@ async fn run(opts: CliOptions) -> Result<(), String> {
         history_store.clone(),
         push_manager.clone(),
         vapid_public_key.clone(),
+        search.clone(),
     );
 
     let bind_ip: IpAddr = bind
@@ -419,10 +432,26 @@ async fn run(opts: CliOptions) -> Result<(), String> {
     }
 
     unregister_instance(bound_port);
+    if let Some(s) = search.as_ref() {
+        s.shutdown();
+    }
     if let Some(t) = tunnel_handle {
         t.stop().await;
     }
     Ok(())
+}
+
+fn frecency_db_path(root: &std::path::Path) -> Option<PathBuf> {
+    let cache = std::env::var("XDG_CACHE_HOME")
+        .ok()
+        .map(PathBuf::from)
+        .or_else(|| std::env::var("HOME").ok().map(|h| PathBuf::from(h).join(".cache")))?;
+    let abs = root.to_string_lossy();
+    let mut h: u64 = 5381;
+    for b in abs.bytes() {
+        h = h.wrapping_mul(33).wrapping_add(b as u64);
+    }
+    Some(cache.join("treepeek").join(format!("{:016x}", h)).join("frecency"))
 }
 
 fn relative_changed(root: &std::path::Path, paths: &[String]) -> Vec<String> {

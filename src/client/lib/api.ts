@@ -114,6 +114,70 @@ export async function fetchFile(
   return (await res.json()) as FileResponse;
 }
 
+export interface SearchHit {
+  path: string;
+  score: number;
+  exactMatch: boolean;
+}
+
+export interface SearchResponse {
+  results: SearchHit[];
+}
+
+export async function fetchSearch(
+  query: string,
+  ws: number | null,
+  limit: number,
+  signal?: AbortSignal
+): Promise<SearchHit[]> {
+  const url = withWs(
+    `/api/search?q=${encodeURIComponent(query)}&limit=${limit}`,
+    ws
+  );
+  try {
+    const res = await fetch(url, { cache: "no-store", signal });
+    if (!res.ok) return [];
+    const data = (await res.json()) as SearchResponse;
+    return data.results ?? [];
+  } catch {
+    return [];
+  }
+}
+
+export interface OutlineSymbol {
+  name: string;
+  kind: string;
+  line: number;
+  depth: number;
+}
+
+export interface OutlineLink {
+  line: number;
+  target: string;
+}
+
+export interface OutlineResponse {
+  symbols: OutlineSymbol[];
+  links: OutlineLink[];
+}
+
+export async function fetchOutline(
+  path: string,
+  ws: number | null,
+  signal?: AbortSignal
+): Promise<OutlineResponse | null> {
+  try {
+    const res = await fetch(
+      withWs(`/api/outline?p=${encodeURIComponent(path)}`, ws),
+      { cache: "no-store", signal }
+    );
+    if (!res.ok) return null;
+    return (await res.json()) as OutlineResponse;
+  } catch {
+    return null;
+  }
+}
+
 export interface DiffResponse {
   path: string;
   patch: string;

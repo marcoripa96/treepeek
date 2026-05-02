@@ -1,10 +1,16 @@
-import { lazy, Suspense, useEffect, useRef, useState } from "react";
-import { fetchFile } from "../lib/api";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
+import {
+  fetchFile,
+  fetchOutline,
+  type OutlineLink,
+  type OutlineSymbol,
+} from "../lib/api";
 import { formatSize } from "../lib/formatSize";
 import { highlightAsync } from "../lib/highlighter";
 import { hapticLight, hapticSelection } from "../lib/haptics";
 import { formatLineHash, type LineRange } from "../lib/lineHash";
-import { Share } from "./icons";
+import { ChevronDown, List as ListIcon, Share } from "./icons";
+import { OutlinePanel } from "./OutlinePanel";
 
 const DiffView = lazy(() =>
   import("./DiffView").then((m) => ({ default: m.DiffView }))
@@ -16,6 +22,7 @@ interface Props {
   hasDiff: boolean;
   lineRange: LineRange | null;
   onLineRangeChange: (range: LineRange | null) => void;
+  onNavigate: (path: string) => void;
   onClose: () => void;
 }
 
@@ -34,18 +41,38 @@ export function Sheet({
   hasDiff,
   lineRange,
   onLineRangeChange,
+  onNavigate,
   onClose,
 }: Props) {
   const [state, setState] = useState<RenderState>({ kind: "loading" });
   const [mode, setMode] = useState<Mode>("content");
   const [shareToast, setShareToast] = useState<string | null>(null);
+  const [symbols, setSymbols] = useState<OutlineSymbol[]>([]);
+  const [links, setLinks] = useState<OutlineLink[]>([]);
+  const [outlineOpen, setOutlineOpen] = useState(false);
   const sheetRef = useRef<HTMLElement | null>(null);
   const handleRef = useRef<HTMLDivElement | null>(null);
   const bodyRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     setMode("content");
+    setOutlineOpen(false);
+    setSymbols([]);
+    setLinks([]);
   }, [path]);
+
+  // Fetch outline whenever the file changes.
+  useEffect(() => {
+    if (!path) return;
+    const abort = new AbortController();
+    (async () => {
+      const data = await fetchOutline(path, ws, abort.signal);
+      if (abort.signal.aborted || !data) return;
+      setSymbols(data.symbols);
+      setLinks(data.links);
+    })();
+    return () => abort.abort();
+  }, [path, ws]);
 
   useEffect(() => {
     if (!hasDiff && mode === "diff") setMode("content");
@@ -335,6 +362,28 @@ export function Sheet({
           >
             {path ?? ""}
           </button>
+          {symbols.length > 0 && mode === "content" && (
+            <button
+              type="button"
+              className="sheet-outline-btn"
+              aria-pressed={outlineOpen}
+              aria-label="toggle outline"
+              onClick={() => {
+                hapticSelection();
+                setOutlineOpen((o) => !o);
+              }}
+            >
+              <ListIcon width={16} height={16} />
+              <span className="outline-count">{symbols.length}</span>
+              <ChevronDown
+                width={14}
+                height={14}
+                className={
+                  "outline-chevron" + (outlineOpen ? " open" : "")
+                }
+              />
+            </button>
+          )}
           {hasDiff && (
             <button
               type="button"
@@ -358,13 +407,29 @@ export function Sheet({
             <Share width={18} height={18} />
           </button>
         </header>
+        {outlineOpen && symbols.length > 0 && mode === "content" && (
+          <OutlinePanel
+            symbols={symbols}
+            activeLine={lineRange?.start ?? null}
+            onJump={(line) => {
+              hapticSelection();
+              onLineRangeChange({ start: line, end: line });
+              setOutlineOpen(false);
+            }}
+          />
+        )}
         <div className="sheet-body" ref={bodyRef}>
           {mode === "diff" && path ? (
             <Suspense fallback={null}>
               <DiffView path={path} ws={ws} />
             </Suspense>
           ) : (
-            <SheetBody state={state} lineRange={lineRange} />
+            <SheetBody
+              state={state}
+              lineRange={lineRange}
+              links={links}
+              onNavigate={onNavigate}
+            />
           )}
         </div>
         {shareToast !== null && (
@@ -380,9 +445,13 @@ export function Sheet({
 function SheetBody({
   state,
   lineRange,
+  links,
+  onNavigate,
 }: {
   state: RenderState;
   lineRange: LineRange | null;
+  links: OutlineLink[];
+  onNavigate: (path: string) => void;
 }) {
   switch (state.kind) {
     case "loading":
@@ -404,6 +473,8 @@ function SheetBody({
           content={state.content}
           path={state.path}
           lineRange={lineRange}
+          links={links}
+          onNavigate={onNavigate}
         />
       );
   }
@@ -413,14 +484,24 @@ function TextRender({
   content,
   path,
   lineRange,
+  links,
+  onNavigate,
 }: {
   content: string;
   path: string;
   lineRange: LineRange | null;
+  links: OutlineLink[];
+  onNavigate: (path: string) => void;
 }) {
   const [highlighted, setHighlighted] = useState<string | null>(null);
   const hostRef = useRef<HTMLDivElement | null>(null);
   const scrolledKey = useRef<string | null>(null);
+
+  const linkByLine = useMemo(() => {
+    const m = new Map<number, string>();
+    for (const l of links) m.set(l.line, l.target);
+    return m;
+  }, [links]);
 
   useEffect(() => {
     let cancelled = false;
@@ -447,6 +528,45 @@ function TextRender({
       el.classList.toggle("line-highlight", inRange);
     }
   }, [lineRange, highlighted, content]);
+
+  // Stamp data-import-target on linkable lines so CSS + click delegation can
+  // pick them up across re-renders (plain → highlighted handoff).
+  useEffect(() => {
+    const host = hostRef.current;
+    if (!host) return;
+    const lines = host.querySelectorAll<HTMLElement>(".line[data-line]");
+    for (const el of lines) {
+      const n = Number(el.dataset.line);
+      const target = linkByLine.get(n);
+      if (target) {
+        el.dataset.importTarget = target;
+      } else if (el.dataset.importTarget) {
+        delete el.dataset.importTarget;
+      }
+    }
+  }, [linkByLine, highlighted, content]);
+
+  // Click delegation for import jumps. Skips clicks on the line-number column.
+  useEffect(() => {
+    const host = hostRef.current;
+    if (!host) return;
+    const onClick = (e: MouseEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (!target) return;
+      if (target.closest(".ln-num")) return;
+      const lnContent = target.closest(".ln-content");
+      if (!lnContent) return;
+      const line = lnContent.parentElement as HTMLElement | null;
+      const dest = line?.dataset.importTarget;
+      if (!dest) return;
+      e.preventDefault();
+      e.stopPropagation();
+      hapticSelection();
+      onNavigate(dest);
+    };
+    host.addEventListener("click", onClick);
+    return () => host.removeEventListener("click", onClick);
+  }, [onNavigate]);
 
   // Scroll the anchor line into view when the file/range changes.
   useEffect(() => {

@@ -381,6 +381,7 @@ export function App() {
               <SearchList
                 paths={visiblePaths}
                 query={activeQuery}
+                ws={currentWs}
                 gitStatus={tree.gitStatus}
                 onOpenFile={onOpenFile}
                 visible={true}
@@ -418,6 +419,7 @@ export function App() {
           hasDiff={selectedFileHasDiff}
           lineRange={lineRange}
           onLineRangeChange={setLineRange}
+          onNavigate={onOpenFile}
           onClose={onCloseFile}
         />
       </main>
