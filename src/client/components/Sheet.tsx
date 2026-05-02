@@ -3,6 +3,8 @@ import { fetchFile } from "../lib/api";
 import { formatSize } from "../lib/formatSize";
 import { highlightAsync } from "../lib/highlighter";
 import { hapticLight, hapticSelection } from "../lib/haptics";
+import { formatLineHash, type LineRange } from "../lib/lineHash";
+import { Share } from "./icons";
 
 const DiffView = lazy(() =>
   import("./DiffView").then((m) => ({ default: m.DiffView }))
@@ -12,6 +14,8 @@ interface Props {
   path: string | null;
   ws: number | null;
   hasDiff: boolean;
+  lineRange: LineRange | null;
+  onLineRangeChange: (range: LineRange | null) => void;
   onClose: () => void;
 }
 
@@ -24,9 +28,17 @@ type RenderState =
   | { kind: "image"; mime: string; base64: string }
   | { kind: "unsupported"; reason: string; size: number };
 
-export function Sheet({ path, ws, hasDiff, onClose }: Props) {
+export function Sheet({
+  path,
+  ws,
+  hasDiff,
+  lineRange,
+  onLineRangeChange,
+  onClose,
+}: Props) {
   const [state, setState] = useState<RenderState>({ kind: "loading" });
   const [mode, setMode] = useState<Mode>("content");
+  const [shareToast, setShareToast] = useState<string | null>(null);
   const sheetRef = useRef<HTMLElement | null>(null);
   const handleRef = useRef<HTMLDivElement | null>(null);
   const bodyRef = useRef<HTMLDivElement | null>(null);
@@ -162,6 +174,140 @@ export function Sheet({ path, ws, hasDiff, onClose }: Props) {
     };
   }, []);
 
+
+  // Tap / long-press a line number to set or extend the line range.
+  useEffect(() => {
+    const body = bodyRef.current;
+    if (!body) return;
+    const LONG_PRESS_MS = 380;
+    const MOVE_TOLERANCE = 8;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let downX = 0;
+    let downY = 0;
+    let downLine: number | null = null;
+    let didLongPress = false;
+
+    const clearTimer = () => {
+      if (timer !== null) {
+        clearTimeout(timer);
+        timer = null;
+      }
+    };
+
+    const lineFromTarget = (target: EventTarget | null): number | null => {
+      const el = (target as HTMLElement | null)?.closest<HTMLElement>(".ln-num");
+      if (!el) return null;
+      const n = Number(el.dataset.line);
+      return Number.isFinite(n) && n > 0 ? n : null;
+    };
+
+    const onPointerDown = (e: PointerEvent) => {
+      const n = lineFromTarget(e.target);
+      if (n === null) return;
+      downLine = n;
+      downX = e.clientX;
+      downY = e.clientY;
+      didLongPress = false;
+      clearTimer();
+      timer = setTimeout(() => {
+        timer = null;
+        didLongPress = true;
+        const anchor = lineRange?.start ?? n;
+        const start = Math.min(anchor, n);
+        const end = Math.max(anchor, n);
+        hapticSelection();
+        onLineRangeChange({ start, end });
+      }, LONG_PRESS_MS);
+    };
+
+    const onPointerMove = (e: PointerEvent) => {
+      if (downLine === null) return;
+      const dx = Math.abs(e.clientX - downX);
+      const dy = Math.abs(e.clientY - downY);
+      if (dx > MOVE_TOLERANCE || dy > MOVE_TOLERANCE) {
+        clearTimer();
+        downLine = null;
+      }
+    };
+
+    const onPointerUp = (e: PointerEvent) => {
+      const n = downLine;
+      const wasLong = didLongPress;
+      clearTimer();
+      downLine = null;
+      didLongPress = false;
+      if (n === null) return;
+      if (wasLong) return;
+      // Tap: shift-click extends, plain click anchors.
+      if (e.shiftKey && lineRange) {
+        const anchor = lineRange.start;
+        const start = Math.min(anchor, n);
+        const end = Math.max(anchor, n);
+        hapticSelection();
+        onLineRangeChange({ start, end });
+      } else {
+        hapticSelection();
+        onLineRangeChange({ start: n, end: n });
+      }
+    };
+
+    const onPointerCancel = () => {
+      clearTimer();
+      downLine = null;
+      didLongPress = false;
+    };
+
+    body.addEventListener("pointerdown", onPointerDown);
+    body.addEventListener("pointermove", onPointerMove);
+    body.addEventListener("pointerup", onPointerUp);
+    body.addEventListener("pointercancel", onPointerCancel);
+    return () => {
+      body.removeEventListener("pointerdown", onPointerDown);
+      body.removeEventListener("pointermove", onPointerMove);
+      body.removeEventListener("pointerup", onPointerUp);
+      body.removeEventListener("pointercancel", onPointerCancel);
+      clearTimer();
+    };
+  }, [lineRange, onLineRangeChange]);
+
+  const onCopyPath = async () => {
+    if (!path) return;
+    hapticSelection();
+    try {
+      await navigator.clipboard.writeText(path);
+      setShareToast("Path copied");
+    } catch {
+      setShareToast("Copy failed");
+    }
+    setTimeout(() => setShareToast(null), 1400);
+  };
+
+  const onShare = async () => {
+    if (!path) return;
+    const url = new URL(location.origin);
+    url.searchParams.set("file", path);
+    url.hash = formatLineHash(lineRange);
+    const shareUrl = url.toString();
+    const title = path.split("/").pop() || path;
+    hapticSelection();
+    if (typeof navigator.share === "function") {
+      try {
+        await navigator.share({ url: shareUrl, title });
+        return;
+      } catch {
+        // fall through to clipboard
+      }
+    }
+    try {
+      await navigator.clipboard.writeText(shareUrl);
+      setShareToast("Link copied");
+      setTimeout(() => setShareToast(null), 1400);
+    } catch {
+      setShareToast("Copy failed");
+      setTimeout(() => setShareToast(null), 1400);
+    }
+  };
+
   const open = path !== null;
   return (
     <>
@@ -181,7 +327,14 @@ export function Sheet({ path, ws, hasDiff, onClose }: Props) {
       >
         <div className="sheet-handle" ref={handleRef} aria-label="Drag to dismiss" />
         <header className="sheet-header">
-          <div className="sheet-title">{path ?? ""}</div>
+          <button
+            type="button"
+            className="sheet-title"
+            aria-label="copy file path"
+            onClick={onCopyPath}
+          >
+            {path ?? ""}
+          </button>
           {hasDiff && (
             <button
               type="button"
@@ -196,6 +349,14 @@ export function Sheet({ path, ws, hasDiff, onClose }: Props) {
               Diff
             </button>
           )}
+          <button
+            type="button"
+            className="sheet-share-btn"
+            aria-label="share link to this file"
+            onClick={onShare}
+          >
+            <Share width={18} height={18} />
+          </button>
         </header>
         <div className="sheet-body" ref={bodyRef}>
           {mode === "diff" && path ? (
@@ -203,15 +364,26 @@ export function Sheet({ path, ws, hasDiff, onClose }: Props) {
               <DiffView path={path} ws={ws} />
             </Suspense>
           ) : (
-            <SheetBody state={state} />
+            <SheetBody state={state} lineRange={lineRange} />
           )}
         </div>
+        {shareToast !== null && (
+          <div className="sheet-toast" role="status">
+            {shareToast}
+          </div>
+        )}
       </aside>
     </>
   );
 }
 
-function SheetBody({ state }: { state: RenderState }) {
+function SheetBody({
+  state,
+  lineRange,
+}: {
+  state: RenderState;
+  lineRange: LineRange | null;
+}) {
   switch (state.kind) {
     case "loading":
       return null;
@@ -227,15 +399,33 @@ function SheetBody({ state }: { state: RenderState }) {
         </div>
       );
     case "text":
-      return <TextRender content={state.content} path={state.path} />;
+      return (
+        <TextRender
+          content={state.content}
+          path={state.path}
+          lineRange={lineRange}
+        />
+      );
   }
 }
 
-function TextRender({ content, path }: { content: string; path: string }) {
+function TextRender({
+  content,
+  path,
+  lineRange,
+}: {
+  content: string;
+  path: string;
+  lineRange: LineRange | null;
+}) {
   const [highlighted, setHighlighted] = useState<string | null>(null);
+  const hostRef = useRef<HTMLDivElement | null>(null);
+  const scrolledKey = useRef<string | null>(null);
+
   useEffect(() => {
     let cancelled = false;
     setHighlighted(null);
+    scrolledKey.current = null;
     highlightAsync(content, path).then((html) => {
       if (!cancelled && html) setHighlighted(html);
     });
@@ -244,20 +434,54 @@ function TextRender({ content, path }: { content: string; path: string }) {
     };
   }, [content, path]);
 
+  // Apply highlight class to lines inside the active range.
+  useEffect(() => {
+    const host = hostRef.current;
+    if (!host) return;
+    const lines = host.querySelectorAll<HTMLElement>(".line[data-line]");
+    const start = lineRange?.start ?? 0;
+    const end = lineRange?.end ?? 0;
+    for (const el of lines) {
+      const n = Number(el.dataset.line);
+      const inRange = start > 0 && n >= start && n <= end;
+      el.classList.toggle("line-highlight", inRange);
+    }
+  }, [lineRange, highlighted, content]);
+
+  // Scroll the anchor line into view when the file/range changes.
+  useEffect(() => {
+    const host = hostRef.current;
+    if (!host || !lineRange) return;
+    const key = `${path}:${lineRange.start}-${lineRange.end}`;
+    if (scrolledKey.current === key) return;
+    const target = host.querySelector<HTMLElement>(
+      `.line[data-line="${lineRange.start}"]`
+    );
+    if (!target) return;
+    scrolledKey.current = key;
+    target.scrollIntoView({ block: "center", behavior: "smooth" });
+  }, [lineRange, highlighted, path]);
+
   if (highlighted) {
-    return <div dangerouslySetInnerHTML={{ __html: highlighted }} />;
+    return (
+      <div ref={hostRef} dangerouslySetInnerHTML={{ __html: highlighted }} />
+    );
   }
   const lines = content.split("\n");
   return (
-    <pre className="plain">
-      <code>
-        {lines.map((line, i) => (
-          <span key={i} className="line">
-            <span className="ln-num">{i + 1}</span>
-            <span className="ln-content">{line.length === 0 ? "​" : line}</span>
-          </span>
-        ))}
-      </code>
-    </pre>
+    <div ref={hostRef}>
+      <pre className="plain">
+        <code>
+          {lines.map((line, i) => (
+            <span key={i} className="line" data-line={i + 1}>
+              <span className="ln-num" data-line={i + 1}>
+                {i + 1}
+              </span>
+              <span className="ln-content">{line.length === 0 ? "​" : line}</span>
+            </span>
+          ))}
+        </code>
+      </pre>
+    </div>
   );
 }

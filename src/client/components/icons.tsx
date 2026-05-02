@@ -211,3 +211,27 @@ export function CloseCircle(props: IconProps) {
     </svg>
   );
 }
+
+export function Share(props: IconProps) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      width="1em"
+      height="1em"
+      viewBox="0 0 24 24"
+      aria-hidden="true"
+      {...props}
+    >
+      <g
+        fill="none"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth="1.5"
+      >
+        <path d="M12 15V3m0 0l-4 4m4-4l4 4" />
+        <path d="M5 13v5a3 3 0 0 0 3 3h8a3 3 0 0 0 3-3v-5" />
+      </g>
+    </svg>
+  );
+}

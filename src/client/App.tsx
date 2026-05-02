@@ -18,6 +18,12 @@ import { SettingsSheet } from "./components/SettingsSheet";
 import { Settings as SettingsIcon, SolarHamburgerMenuLinear } from "./components/icons";
 import { setThemeColor } from "./lib/themeColor";
 import { hapticSelection } from "./lib/haptics";
+import {
+  formatLineHash,
+  parseLineHash,
+  setHashSilently,
+  type LineRange,
+} from "./lib/lineHash";
 
 const THEME_DEFAULT = "#ffffff";
 const THEME_BACKDROP = "#dcdbda";
@@ -62,6 +68,9 @@ export function App() {
   const [searchQuery, setSearchQuery] = useState("");
   const [liveStatus, setLiveStatus] = useState<LiveStatus>("connecting");
   const [selectedFile, setSelectedFile] = useState<string | null>(readFileFromUrl);
+  const [lineRange, setLineRange] = useState<LineRange | null>(() =>
+    parseLineHash(location.hash)
+  );
   const [statusMsg, setStatusMsg] = useState<string | null>("Loading…");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [directoriesOpen, setDirectoriesOpen] = useState(false);
@@ -215,6 +224,26 @@ export function App() {
     if (selectedFile !== null) clearFileFromUrl();
   }, [selectedFile]);
 
+  // External hash changes (back/forward, deep link click) → update lineRange.
+  useEffect(() => {
+    const onHashChange = () => {
+      setLineRange(parseLineHash(location.hash));
+    };
+    window.addEventListener("hashchange", onHashChange);
+    return () => window.removeEventListener("hashchange", onHashChange);
+  }, []);
+
+  // When the line range changes from in-app interaction, mirror it into the URL hash.
+  useEffect(() => {
+    const desired = formatLineHash(lineRange);
+    if (location.hash !== desired) setHashSilently(desired);
+  }, [lineRange]);
+
+  // Closing the file or switching files clears the line range.
+  useEffect(() => {
+    if (selectedFile === null && lineRange !== null) setLineRange(null);
+  }, [selectedFile, lineRange]);
+
   // Drive iOS / PWA status-bar color from UI state
   useEffect(() => {
     const target =
@@ -247,7 +276,10 @@ export function App() {
 
   const onOpenFile = useCallback((path: string) => {
     hapticSelection();
-    setSelectedFile(path);
+    setSelectedFile((prev) => {
+      if (prev !== path) setLineRange(null);
+      return path;
+    });
   }, []);
 
   const onCloseFile = useCallback(() => {
@@ -384,6 +416,8 @@ export function App() {
           path={selectedFile}
           ws={currentWs}
           hasDiff={selectedFileHasDiff}
+          lineRange={lineRange}
+          onLineRangeChange={setLineRange}
           onClose={onCloseFile}
         />
       </main>

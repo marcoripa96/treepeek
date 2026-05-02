@@ -110,11 +110,12 @@ const lineNumberTransformer: ShikiTransformer = {
   name: "treepeek:line-numbers",
   line(node, line) {
     const original = node.children;
+    node.properties = { ...(node.properties ?? {}), "data-line": String(line) };
     node.children = [
       {
         type: "element",
         tagName: "span",
-        properties: { class: "ln-num" },
+        properties: { class: "ln-num", "data-line": String(line) },
         children: [{ type: "text", value: String(line) }],
       },
       {
