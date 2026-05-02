@@ -214,9 +214,24 @@ body {
   z-index: 50;
   background: transparent;
   pointer-events: none;
+  touch-action: none;
 }
 .directory-shell[data-directories-open="true"] .directory-scrim {
   pointer-events: auto;
+}
+.directory-edge-swipe {
+  position: fixed;
+  top: calc(var(--safe-top) + 60px);
+  left: 0;
+  bottom: 0;
+  width: 24px;
+  z-index: 14;
+  background: transparent;
+  touch-action: none;
+  pointer-events: auto;
+}
+.directory-shell[data-directories-open="true"] .directory-edge-swipe {
+  pointer-events: none;
 }
 .directory-topbar {
   position: fixed;

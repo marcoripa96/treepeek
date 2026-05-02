@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   fetchInstances,
   fetchHistory,
@@ -74,6 +74,11 @@ export function App() {
   const [statusMsg, setStatusMsg] = useState<string | null>("Loading…");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [directoriesOpen, setDirectoriesOpen] = useState(false);
+
+  const mainRef = useRef<HTMLElement | null>(null);
+  const edgeRef = useRef<HTMLDivElement | null>(null);
+  const scrimRef = useRef<HTMLDivElement | null>(null);
+  const panelRef = useRef<HTMLElement | null>(null);
 
   const [settings, updateSettings] = useSettings();
 
@@ -255,6 +260,143 @@ export function App() {
     setThemeColor(target, 240);
   }, [selectedFile, settingsOpen, directoriesOpen]);
 
+  // Native-feel edge swipe: drag from the left to open the directory drawer,
+  // drag right-to-left over the scrim to close it. Bypassed while another
+  // sheet is foregrounded, since those own the gesture surface.
+  useEffect(() => {
+    const main = mainRef.current;
+    if (!main) return;
+    if (selectedFile !== null || settingsOpen) return;
+    const target = directoriesOpen ? scrimRef.current : edgeRef.current;
+    if (!target) return;
+
+    const COMMIT_PX = 8;
+    const FLICK_VELOCITY = 0.4; // px/ms
+    let panelWidth = 0;
+    let startX = 0;
+    let startY = 0;
+    let lastX = 0;
+    let lastT = 0;
+    let velocity = 0;
+    let committed = false;
+    let pointerId: number | null = null;
+    let cleanupTransition: (() => void) | null = null;
+
+    const settleTo = (snapOpen: boolean) => {
+      cleanupTransition?.();
+      cleanupTransition = null;
+      const targetX = snapOpen ? panelWidth : 0;
+      main.style.transition = "";
+      main.style.transform = `translate3d(${targetX}px, 0, 0)`;
+      if (snapOpen !== directoriesOpen) {
+        hapticSelection();
+        setDirectoriesOpen(snapOpen);
+      }
+      const finish = () => {
+        main.style.transform = "";
+        main.removeEventListener("transitionend", onEnd);
+        clearTimeout(fallback);
+        cleanupTransition = null;
+      };
+      const onEnd = (e: TransitionEvent) => {
+        if (e.propertyName === "transform") finish();
+      };
+      main.addEventListener("transitionend", onEnd);
+      const fallback = window.setTimeout(finish, 360);
+      cleanupTransition = finish;
+    };
+
+    const onPointerDown = (e: PointerEvent) => {
+      if (e.pointerType === "mouse" && e.button !== 0) return;
+      panelWidth = panelRef.current?.offsetWidth ?? 0;
+      if (panelWidth <= 0) return;
+      pointerId = e.pointerId;
+      startX = lastX = e.clientX;
+      startY = e.clientY;
+      lastT = e.timeStamp;
+      velocity = 0;
+      committed = false;
+    };
+
+    const onPointerMove = (e: PointerEvent) => {
+      if (pointerId === null || e.pointerId !== pointerId) return;
+      const dx = e.clientX - startX;
+      const dy = e.clientY - startY;
+      if (!committed) {
+        if (Math.abs(dx) < COMMIT_PX && Math.abs(dy) < COMMIT_PX) return;
+        if (Math.abs(dy) > Math.abs(dx)) {
+          pointerId = null;
+          return;
+        }
+        if (!directoriesOpen && dx <= 0) {
+          pointerId = null;
+          return;
+        }
+        if (directoriesOpen && dx >= 0) {
+          pointerId = null;
+          return;
+        }
+        committed = true;
+        try {
+          target.setPointerCapture(e.pointerId);
+        } catch {}
+        cleanupTransition?.();
+        cleanupTransition = null;
+        main.style.transition = "none";
+      }
+      const baseX = directoriesOpen ? panelWidth : 0;
+      let nextX = baseX + dx;
+      if (nextX < 0) nextX = 0;
+      if (nextX > panelWidth) nextX = panelWidth;
+      main.style.transform = `translate3d(${nextX}px, 0, 0)`;
+      const dt = e.timeStamp - lastT;
+      if (dt > 0) {
+        velocity = (e.clientX - lastX) / dt;
+        lastX = e.clientX;
+        lastT = e.timeStamp;
+      }
+      e.preventDefault();
+    };
+
+    const onPointerEnd = (e: PointerEvent) => {
+      if (pointerId === null || e.pointerId !== pointerId) return;
+      if (!committed) {
+        pointerId = null;
+        return;
+      }
+      const baseX = directoriesOpen ? panelWidth : 0;
+      const currentX = Math.max(
+        0,
+        Math.min(panelWidth, baseX + (lastX - startX))
+      );
+      let snapOpen: boolean;
+      if (Math.abs(velocity) > FLICK_VELOCITY) snapOpen = velocity > 0;
+      else snapOpen = currentX > panelWidth * 0.5;
+      settleTo(snapOpen);
+      pointerId = null;
+      committed = false;
+    };
+
+    const onPointerCancel = (e: PointerEvent) => {
+      if (pointerId !== null && e.pointerId !== pointerId) return;
+      if (committed) settleTo(directoriesOpen);
+      pointerId = null;
+      committed = false;
+    };
+
+    target.addEventListener("pointerdown", onPointerDown);
+    target.addEventListener("pointermove", onPointerMove);
+    target.addEventListener("pointerup", onPointerEnd);
+    target.addEventListener("pointercancel", onPointerCancel);
+
+    return () => {
+      target.removeEventListener("pointerdown", onPointerDown);
+      target.removeEventListener("pointermove", onPointerMove);
+      target.removeEventListener("pointerup", onPointerEnd);
+      target.removeEventListener("pointercancel", onPointerCancel);
+    };
+  }, [directoriesOpen, selectedFile, settingsOpen]);
+
   const onSelectPort = useCallback(
     (port: number) => {
       if (selfPort == null) return;
@@ -303,7 +445,7 @@ export function App() {
 
   return (
     <div className="directory-shell" data-directories-open={directoriesOpen ? "true" : "false"}>
-      <aside className="directory-panel" aria-label="directories">
+      <aside className="directory-panel" aria-label="directories" ref={panelRef}>
         <div className="directory-panel-title">Directories</div>
         <div className="directory-panel-list" role="listbox" aria-label="available directories">
           {instances.length === 0 ? (
@@ -337,14 +479,20 @@ export function App() {
         </button>
       </aside>
 
-      <main className="directory-main">
+      <main className="directory-main" ref={mainRef}>
         <div
           className="directory-scrim"
+          ref={scrimRef}
           aria-hidden={!directoriesOpen}
           onClick={() => {
             hapticSelection();
             setDirectoriesOpen(false);
           }}
+        />
+        <div
+          className="directory-edge-swipe"
+          ref={edgeRef}
+          aria-hidden="true"
         />
         <div className="directory-topbar">
           <button
