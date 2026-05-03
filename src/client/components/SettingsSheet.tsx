@@ -241,16 +241,16 @@ function DevicesSection({ open }: { open: boolean }) {
                 key={d.id}
                 className={`device-row${isThis ? " device-row-current" : ""}`}
               >
+                {isThis ? (
+                  <DeviceMobile
+                    className="device-current-icon"
+                    aria-label="This device"
+                  />
+                ) : (
+                  <span className="device-current-icon device-current-icon-empty" aria-hidden="true" />
+                )}
                 <div className="device-meta">
-                  <div className="device-name">
-                    {isThis ? (
-                      <DeviceMobile
-                        className="device-current-icon"
-                        aria-label="This device"
-                      />
-                    ) : null}
-                    {d.name}
-                  </div>
+                  <div className="device-name">{d.name}</div>
                   <div className="device-time">
                     Last seen {formatRelative(d.last_seen_at)}
                   </div>

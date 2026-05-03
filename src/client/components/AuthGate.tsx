@@ -4,7 +4,6 @@ import {
   isWebAuthnAvailable,
   loginWithPasskey,
   registerPasskey,
-  type AuthStatus,
 } from "../lib/webauthn";
 
 type Stage =
@@ -12,7 +11,7 @@ type Stage =
   | { kind: "logging-in" }
   | { kind: "pairing" }
   | { kind: "needs-qr" }
-  | { kind: "needs-passkey-or-qr"; status: AuthStatus }
+  | { kind: "passkey-failed" }
   | { kind: "ready" }
   | { kind: "error"; message: string };
 
@@ -62,7 +61,7 @@ export function AuthGate({ children }: Props) {
             return;
           }
         } catch {
-          // fall through to pairing
+          // fall through to pairing or failure UI
         }
       }
 
@@ -94,12 +93,13 @@ export function AuthGate({ children }: Props) {
         }
       }
 
-      // Either there's no master token, the platform doesn't support
-      // WebAuthn, or this transport doesn't expose passkey.
-      if (!status.passkeyAvailable) {
-        setStage({ kind: "needs-qr" });
+      // Either no pairing token in URL or passkey unsupported on this transport.
+      // If we have any chance of unlocking with a passkey, surface it; otherwise
+      // ask the user to pair via QR.
+      if (status.passkeyAvailable && status.deviceCount > 0 && isWebAuthnAvailable()) {
+        setStage({ kind: "passkey-failed" });
       } else {
-        setStage({ kind: "needs-passkey-or-qr", status });
+        setStage({ kind: "needs-qr" });
       }
     })();
     return () => {
@@ -126,50 +126,46 @@ export function AuthGate({ children }: Props) {
     );
   }
 
-  if (stage.kind === "needs-qr") {
+  if (stage.kind === "passkey-failed") {
+    const retry = async () => {
+      setStage({ kind: "logging-in" });
+      try {
+        const ok = await loginWithPasskey();
+        if (ok) setStage({ kind: "ready" });
+        else setStage({ kind: "passkey-failed" });
+      } catch {
+        setStage({ kind: "passkey-failed" });
+      }
+    };
     return (
       <div className="auth-gate">
         <div className="auth-gate-card">
-          <h1>Scan the QR code</h1>
+          <h1>Couldn't unlock</h1>
           <p>
-            Open <code>treepeek</code> on the host and scan the QR code, or
-            visit the share URL on this device to pair it.
+            Your passkey for this device wasn't available. You can try again,
+            or pair a fresh passkey by opening the share URL from the host.
           </p>
+          <button
+            type="button"
+            className="auth-gate-link"
+            onClick={() => void retry()}
+          >
+            Try again
+          </button>
         </div>
       </div>
     );
   }
 
-  if (stage.kind === "needs-passkey-or-qr") {
+  if (stage.kind === "needs-qr") {
     return (
       <div className="auth-gate">
         <div className="auth-gate-card">
-          <h1>Authentication required</h1>
+          <h1>Pair this device</h1>
           <p>
-            Use a paired passkey to unlock, or open <code>treepeek</code> on
-            the host and scan the QR code to pair this device.
+            Open <code>treepeek</code> on the host and scan the QR code, or
+            visit the share URL on this device to set up a passkey.
           </p>
-          {stage.status.deviceCount > 0 && isWebAuthnAvailable() ? (
-            <button
-              type="button"
-              className="auth-gate-button"
-              onClick={async () => {
-                setStage({ kind: "logging-in" });
-                try {
-                  const ok = await loginWithPasskey();
-                  if (ok) setStage({ kind: "ready" });
-                  else setStage({ kind: "needs-passkey-or-qr", status: stage.status });
-                } catch (e) {
-                  setStage({
-                    kind: "error",
-                    message: e instanceof Error ? e.message : "Unknown error",
-                  });
-                }
-              }}
-            >
-              Unlock with passkey
-            </button>
-          ) : null}
         </div>
       </div>
     );
@@ -182,7 +178,7 @@ export function AuthGate({ children }: Props) {
         <p>{stage.message}</p>
         <button
           type="button"
-          className="auth-gate-button"
+          className="auth-gate-link"
           onClick={() => location.reload()}
         >
           Reload

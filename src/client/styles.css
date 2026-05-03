@@ -1352,9 +1352,10 @@ body {
   inset: 0;
   display: grid;
   place-items: center;
-  background: #0b0d10;
-  color: #e5e7eb;
+  background: var(--bg);
+  color: var(--fg);
   padding: 24px;
+  font-family: inherit;
 }
 
 .auth-gate-card {
@@ -1364,46 +1365,51 @@ body {
 
 .auth-gate-card h1 {
   font-size: 17px;
+  font-weight: 600;
   margin: 0 0 8px;
-  color: #f3f4f6;
+  color: var(--fg);
 }
 
 .auth-gate-card p {
   font-size: 14px;
-  color: #94a3b8;
+  color: var(--fg-dim);
   margin: 0 0 16px;
   line-height: 1.45;
 }
 
 .auth-gate-card code {
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--accent-muted);
   padding: 1px 5px;
   border-radius: 3px;
   font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   font-size: 12px;
+  color: var(--fg);
 }
 
-.auth-gate-button {
-  background: #2563eb;
-  color: white;
+.auth-gate-link {
+  background: transparent;
+  color: var(--fg);
   border: 0;
-  padding: 10px 18px;
+  padding: 8px 14px;
   border-radius: 8px;
   font-size: 14px;
   font-weight: 500;
+  font-family: inherit;
   cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 3px;
 }
 
-.auth-gate-button:active {
-  background: #1d4ed8;
+.auth-gate-link:active {
+  background: var(--selected);
 }
 
 .auth-gate-spinner {
   width: 28px;
   height: 28px;
   margin: 0 auto 14px;
-  border: 2px solid rgba(255, 255, 255, 0.18);
-  border-top-color: rgba(255, 255, 255, 0.7);
+  border: 2px solid var(--border);
+  border-top-color: var(--fg);
   border-radius: 50%;
   animation: auth-gate-spin 0.9s linear infinite;
 }
@@ -1431,8 +1437,8 @@ body {
 .device-row {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  padding: 8px 12px;
+  gap: 12px;
+  padding: 10px 12px;
   background: rgba(0, 0, 0, 0.04);
   border: 1px solid transparent;
   border-radius: 8px;
@@ -1444,11 +1450,19 @@ body {
 }
 
 .device-current-icon {
-  width: 14px;
-  height: 14px;
-  margin-right: 6px;
-  vertical-align: -2px;
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
   color: var(--fg);
+}
+
+.device-current-icon-empty {
+  display: inline-block;
+}
+
+.device-meta {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .device-meta {
