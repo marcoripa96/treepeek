@@ -282,8 +282,10 @@ body {
   height: 40px;
   display: flex;
   align-items: center;
-  padding: 0;
+  padding: 0 8px;
+  margin-left: -8px;
   border: 0;
+  border-radius: 8px;
   background: transparent;
   color: var(--fg);
   font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
@@ -295,6 +297,16 @@ body {
   direction: rtl;
   text-align: left;
   unicode-bidi: plaintext;
+  cursor: pointer;
+  transition: background 140ms ease;
+}
+.directory-label:hover { background: var(--hover); }
+.directory-label:active { background: var(--selected); }
+.directory-label[aria-pressed="true"] {
+  color: var(--fg);
+  background: var(--hover);
+  border: 1px solid var(--border-strong);
+  padding: 0 7px;
 }
 .toolbar-status {
   position: fixed;
@@ -340,11 +352,44 @@ body {
   white-space: nowrap;
 }
 
-.view-toggle {
+.view-toggle-slot {
   position: fixed;
   bottom: calc(var(--safe-bottom) + 14px);
   left: 14px;
   z-index: 14;
+  transition: opacity 180ms ease, transform 180ms ease;
+}
+.view-toggle-slot.hidden {
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(8px);
+}
+.view-toggle-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 54px;
+  padding: 0 18px 0 12px;
+  background: #ffffff;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: var(--control-shadow);
+  color: var(--fg);
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.view-toggle-back:hover { background: var(--hover); }
+.view-toggle-back:active { background: var(--selected); }
+.view-toggle-back-icon {
+  display: inline-flex;
+  transform: rotate(180deg);
+  color: var(--fg-dim);
+}
+.view-toggle-back-label { letter-spacing: 0.01em; }
+.view-toggle {
   display: flex;
   gap: 3px;
   background: #ffffff;
@@ -355,7 +400,6 @@ body {
   border-radius: 14px;
   padding: 4px;
   height: 54px;
-  transition: opacity 180ms ease, transform 180ms ease;
 }
 .view-toggle.hidden {
   pointer-events: none;
@@ -1527,4 +1571,99 @@ body {
 
 .device-action-secondary:disabled {
   opacity: 0.5;
+}
+
+/* ---------- Pulse view (rendered markdown) ---------- */
+.pulse-md {
+  position: absolute;
+  inset: calc(var(--safe-top) + 62px) 0 0;
+  width: 100%;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 18px 20px calc(var(--safe-bottom) + 110px);
+  background: var(--bg-elev);
+  color: var(--fg);
+  font-size: 15px;
+  line-height: 1.6;
+}
+.pulse-md h1 {
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 24px;
+  font-weight: 700;
+  margin: 6px 0 18px;
+  color: var(--fg);
+}
+.pulse-md h2 {
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 16px;
+  font-weight: 700;
+  margin: 22px 0 8px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border);
+  color: var(--fg);
+}
+.pulse-md p {
+  margin: 8px 0;
+  color: var(--fg-dim);
+}
+.pulse-md ul {
+  list-style: none;
+  padding: 0;
+  margin: 8px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.pulse-md li {
+  position: relative;
+  padding-left: 18px;
+  color: var(--fg);
+}
+.pulse-md li::before {
+  content: "·";
+  position: absolute;
+  left: 4px;
+  top: 0;
+  color: var(--fg-muted);
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+.pulse-md li > p {
+  margin: 0;
+  color: var(--fg);
+}
+.pulse-md li > p + p {
+  margin-top: 2px;
+  color: var(--fg-dim);
+  font-size: 12.5px;
+}
+.pulse-md code {
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.92em;
+  background: var(--accent-muted);
+  border-radius: 5px;
+  padding: 1px 5px;
+  color: var(--fg);
+  word-break: break-all;
+}
+.pulse-md strong { color: var(--fg); font-weight: 700; }
+.pulse-md em { color: var(--fg-muted); }
+.pulse-md a {
+  color: var(--fg);
+  text-decoration: underline;
+  text-decoration-color: var(--border-strong);
+  text-underline-offset: 3px;
+}
+.pulse-md-link {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  color: var(--fg);
+  cursor: pointer;
+  text-align: left;
+  word-break: break-all;
+}
+.pulse-md-link:hover code {
+  background: var(--selected);
 }

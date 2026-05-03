@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { Settings, UpdateSettings, ViewMode } from "../lib/settings";
+import type { Settings, TreeViewMode, UpdateSettings } from "../lib/settings";
 import { pushSupported, subscribePush, unsubscribePush } from "../lib/push";
 import { CloseCircle, DeviceMobile } from "./icons";
 import { hapticLight, hapticSelection, hapticSuccess, hapticError } from "../lib/haptics";
@@ -44,9 +44,9 @@ export function SettingsSheet({
     onUpdate({ notifications: ok });
   };
 
-  const setDefaultView = (view: ViewMode) => {
+  const setDefaultTreeView = (view: TreeViewMode) => {
     hapticSelection();
-    onUpdate({ defaultView: view });
+    onUpdate({ lastTreeView: view });
   };
 
   const handleClose = () => {
@@ -108,14 +108,14 @@ export function SettingsSheet({
           </label>
 
           <div className="settings-row">
-            <span className="settings-label">Default view</span>
-            <div className="settings-segmented" role="radiogroup" aria-label="default view">
+            <span className="settings-label">Default tree view</span>
+            <div className="settings-segmented" role="radiogroup" aria-label="default tree view">
               <button
                 type="button"
                 className="settings-segment"
                 role="radio"
-                aria-checked={settings.defaultView === "folders"}
-                onClick={() => setDefaultView("folders")}
+                aria-checked={settings.lastTreeView === "folders"}
+                onClick={() => setDefaultTreeView("folders")}
               >
                 Folders
               </button>
@@ -123,8 +123,8 @@ export function SettingsSheet({
                 type="button"
                 className="settings-segment"
                 role="radio"
-                aria-checked={settings.defaultView === "list"}
-                onClick={() => setDefaultView("list")}
+                aria-checked={settings.lastTreeView === "list"}
+                onClick={() => setDefaultTreeView("list")}
               >
                 List
               </button>
@@ -132,8 +132,8 @@ export function SettingsSheet({
                 type="button"
                 className="settings-segment"
                 role="radio"
-                aria-checked={settings.defaultView === "history"}
-                onClick={() => setDefaultView("history")}
+                aria-checked={settings.lastTreeView === "history"}
+                onClick={() => setDefaultTreeView("history")}
               >
                 History
               </button>

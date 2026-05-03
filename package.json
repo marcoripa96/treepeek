@@ -24,6 +24,7 @@
     "motion": "^12.38.0",
     "react": "^19.2.5",
     "react-dom": "^19.2.5",
+    "react-markdown": "^10.1.0",
     "shiki": "^4.0.2",
     "web-haptics": "^0.0.6"
   },

@@ -1,10 +1,12 @@
 import { useCallback, useState } from "react";
 
-export type ViewMode = "list" | "folders" | "history";
+export type ViewMode = "pulse" | "list" | "folders" | "history";
+export type TreeViewMode = Exclude<ViewMode, "pulse">;
 
 export interface Settings {
   notifications: boolean;
   defaultView: ViewMode;
+  lastTreeView: TreeViewMode;
 }
 
 const SETTINGS_KEY = "tp-settings";
@@ -12,8 +14,18 @@ const LEGACY_VIEW_KEY = "tp-view-mode";
 
 const DEFAULT_SETTINGS: Settings = {
   notifications: false,
-  defaultView: "list",
+  defaultView: "pulse",
+  lastTreeView: "list",
 };
+
+function coerceTreeView(v: unknown): TreeViewMode {
+  return v === "history" || v === "folders" ? v : "list";
+}
+
+function coerceView(v: unknown): ViewMode {
+  if (v === "pulse" || v === "history" || v === "folders" || v === "list") return v;
+  return "pulse";
+}
 
 function readSettings(): Settings {
   try {
@@ -21,19 +33,19 @@ function readSettings(): Settings {
     if (raw) {
       const parsed = JSON.parse(raw) as Record<string, unknown>;
       const merged: Settings = {
-        notifications: typeof parsed.notifications === "boolean" ? parsed.notifications : DEFAULT_SETTINGS.notifications,
-        defaultView:
-          parsed.defaultView === "history"
-            ? "history"
-            : parsed.defaultView === "folders"
-              ? "folders"
-              : "list",
+        notifications:
+          typeof parsed.notifications === "boolean"
+            ? parsed.notifications
+            : DEFAULT_SETTINGS.notifications,
+        defaultView: coerceView(parsed.defaultView),
+        lastTreeView: coerceTreeView(parsed.lastTreeView ?? parsed.defaultView),
       };
       return reconcileNotificationPermission(merged);
     }
     const legacy = localStorage.getItem(LEGACY_VIEW_KEY);
-    if (legacy === "history") return { ...DEFAULT_SETTINGS, defaultView: "history" };
-    if (legacy === "folders") return { ...DEFAULT_SETTINGS, defaultView: "folders" };
+    if (legacy === "history" || legacy === "folders" || legacy === "list") {
+      return { ...DEFAULT_SETTINGS, lastTreeView: legacy };
+    }
     return DEFAULT_SETTINGS;
   } catch {
     return DEFAULT_SETTINGS;

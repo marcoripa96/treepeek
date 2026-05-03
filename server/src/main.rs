@@ -35,6 +35,7 @@ use crate::registry::{register_instance, unregister_instance, InstanceInfo};
 use crate::search::SearchService;
 use crate::server::{build_router, AppState};
 use crate::tunnel::{start_cloudflared_quick_tunnel, start_tailscale_funnel, TunnelHandle};
+use crate::watcher::{EventRing, FsEvent};
 
 #[derive(Default)]
 struct CliOptions {
@@ -238,6 +239,7 @@ async fn run(opts: CliOptions) -> Result<(), String> {
     };
 
     let auth_required = opts.require_auth || bind_reason != "tailscale0";
+    let fs_ring = EventRing::new();
     let state = AppState::new(
         root.clone(),
         root_name.clone(),
@@ -251,6 +253,7 @@ async fn run(opts: CliOptions) -> Result<(), String> {
         push_manager.clone(),
         vapid_public_key.clone(),
         search.clone(),
+        fs_ring.clone(),
     );
 
     let bind_ip: IpAddr = bind
@@ -323,26 +326,28 @@ async fn run(opts: CliOptions) -> Result<(), String> {
     let push_for_watch = push_manager.clone();
     let history_for_watch = history_store.clone();
     let vapid_present = vapid_public_key.is_some();
-    let root_for_watch = root.clone();
     let root_name_for_watch = root_name.clone();
-    let on_change = Arc::new(move |changed: Vec<String>| {
+    let on_change = Arc::new(move |events: Vec<FsEvent>| {
+        let changed: Vec<String> = events.iter().map(|e| e.path.clone()).collect();
         history_for_watch.record_changes(&changed);
         let state = watcher_state.clone();
         let push = push_for_watch.clone();
-        let root = root_for_watch.clone();
         let root_name = root_name_for_watch.clone();
+        let events_for_ws = events.clone();
         tokio::spawn(async move {
             state.invalidate_caches().await;
             state.broadcast(&json!({ "type": "changed" })).await;
+            state
+                .broadcast(&json!({ "type": "fs", "events": events_for_ws }))
+                .await;
             if vapid_present && push.has_subscriptions().await {
-                let rel = relative_changed(&root, &changed);
-                let body = describe_changes(&rel);
-                let url = match rel.first() {
+                let body = describe_changes(&changed);
+                let url = match changed.first() {
                     Some(f) => format!("/?file={}", urlencode(f)),
                     None => "/".to_string(),
                 };
                 let title = format!("treepeek · {}", root_name);
-                let file_first = rel.first().map(|s| s.as_str());
+                let file_first = changed.first().map(|s| s.as_str());
                 push.dispatch(&crate::push::DispatchPayload {
                     title: &title,
                     body: &body,
@@ -365,7 +370,8 @@ async fn run(opts: CliOptions) -> Result<(), String> {
     let _watcher = match watcher::start(
         root.clone(),
         opts.all,
-        on_change as Arc<dyn Fn(Vec<String>) + Send + Sync>,
+        fs_ring.clone(),
+        on_change as Arc<dyn Fn(Vec<FsEvent>) + Send + Sync>,
         Some(on_refs_change as Arc<dyn Fn() + Send + Sync>),
     ) {
         Ok(w) => Some(w),
@@ -506,21 +512,6 @@ fn init_passkey_service(origin_url: &str) -> Result<PasskeyService, String> {
         .ok_or_else(|| "origin url missing host".to_string())?
         .to_string();
     PasskeyService::new(&rp_id, &parsed).map_err(|e| format!("webauthn init: {}", e))
-}
-
-fn relative_changed(root: &std::path::Path, paths: &[String]) -> Vec<String> {
-    let prefix = format!("{}/", root.to_string_lossy());
-    paths
-        .iter()
-        .filter_map(|p| {
-            if p.starts_with(&prefix) {
-                Some(p[prefix.len()..].to_string())
-            } else {
-                None
-            }
-        })
-        .filter(|p| !p.is_empty())
-        .collect()
 }
 
 fn describe_changes(rel: &[String]) -> String {

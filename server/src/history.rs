@@ -36,24 +36,19 @@ impl HistoryStore {
         })
     }
 
-    pub fn record_changes(&self, abs_paths: &[String]) {
+    pub fn record_changes(&self, rel_paths: &[String]) {
         let now = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
         let conn = self.conn.lock().unwrap();
         let mut seen = std::collections::HashSet::<String>::new();
-        for abs in abs_paths {
-            let abs_path = std::path::Path::new(abs);
-            let rel_pb = match abs_path.strip_prefix(&self.root) {
-                Ok(r) => r.to_path_buf(),
-                Err(_) => continue,
-            };
-            let rel = rel_pb.to_string_lossy().replace('\\', "/");
+        for rel in rel_paths {
             if rel.is_empty() || rel.starts_with("..") {
                 continue;
             }
             if !seen.insert(rel.clone()) {
                 continue;
             }
-            let exists = abs_path.exists();
+            let abs = self.root.join(rel);
+            let exists = abs.exists();
             let status = if exists { "modified" } else { "deleted" };
             let subject = if exists { "Edited file" } else { "Deleted file" };
             let _ = conn.execute(

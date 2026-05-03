@@ -2,15 +2,19 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   fetchInstances,
   fetchHistory,
+  fetchPulse,
   fetchTree,
+  type FsEvent,
   type GitHistoryEntry,
   type InstanceListEntry,
+  type PulseResponse,
   type TreeResponse,
 } from "./lib/api";
-import { useSettings, type ViewMode } from "./lib/settings";
+import { useSettings, type TreeViewMode, type ViewMode } from "./lib/settings";
 import { SearchList } from "./components/SearchList";
 import { FolderList } from "./components/FolderList";
 import { HistoryList } from "./components/HistoryList";
+import { PulseView } from "./components/PulseView";
 import { ViewToggle } from "./components/ViewToggle";
 import { SearchBar } from "./components/SearchBar";
 import { Sheet } from "./components/Sheet";
@@ -81,12 +85,22 @@ export function App() {
   const panelRef = useRef<HTMLElement | null>(null);
 
   const [settings, updateSettings] = useSettings();
-
-  const viewMode: ViewMode = settings.defaultView;
+  // Cold open always lands on Pulse. The user can switch into a tree view via
+  // the ViewToggle, and that choice persists as `lastTreeView` so back-from-Pulse
+  // restores it.
+  const [viewMode, setViewModeState] = useState<ViewMode>("pulse");
   const setViewMode = useCallback(
-    (mode: ViewMode) => updateSettings({ defaultView: mode }),
+    (mode: ViewMode) => {
+      setViewModeState(mode);
+      if (mode !== "pulse") updateSettings({ lastTreeView: mode as TreeViewMode });
+    },
     [updateSettings]
   );
+  const enterPulse = useCallback(() => setViewModeState("pulse"), []);
+  const exitPulse = useCallback(() => {
+    setViewModeState(settings.lastTreeView);
+  }, [settings.lastTreeView]);
+  const [pulse, setPulse] = useState<PulseResponse | null>(null);
 
   // Bootstrap: load instances once
   useEffect(() => {
@@ -109,13 +123,14 @@ export function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Load tree whenever the active instance changes
+  // Load tree + pulse whenever the active instance changes
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const [data, historyData] = await Promise.all([
+      const [data, historyData, pulseData] = await Promise.all([
         fetchTree(currentWs),
         fetchHistory(currentWs),
+        fetchPulse(currentWs),
       ]);
       if (cancelled) return;
       if (data) {
@@ -125,6 +140,7 @@ export function App() {
         setStatusMsg("Failed to load tree.");
       }
       if (historyData) setHistory(historyData.entries);
+      if (pulseData) setPulse(pulseData);
     })();
     return () => {
       cancelled = true;
@@ -139,13 +155,15 @@ export function App() {
     let timer: ReturnType<typeof setTimeout> | null = null;
 
     const refresh = async () => {
-      const [data, historyData] = await Promise.all([
+      const [data, historyData, pulseData] = await Promise.all([
         fetchTree(currentWs),
         fetchHistory(currentWs),
+        fetchPulse(currentWs),
       ]);
       if (stopped) return;
       if (data) setTree(data);
       if (historyData) setHistory(historyData.entries);
+      if (pulseData) setPulse(pulseData);
     };
 
     const connect = () => {
@@ -167,9 +185,22 @@ export function App() {
       });
       ws.addEventListener("message", (event) => {
         try {
-          const data = JSON.parse(event.data as string) as { type?: string };
+          const data = JSON.parse(event.data as string) as {
+            type?: string;
+            events?: FsEvent[];
+          };
           if (data.type === "changed") {
             void refresh();
+          } else if (data.type === "fs" && Array.isArray(data.events)) {
+            const events = data.events;
+            setPulse((prev) =>
+              prev
+                ? {
+                    ...prev,
+                    recentEvents: [...prev.recentEvents, ...events].slice(-100),
+                  }
+                : prev
+            );
           }
         } catch {}
       });
@@ -507,9 +538,19 @@ export function App() {
           >
             <SolarHamburgerMenuLinear width={22} height={22} />
           </button>
-          <div className="directory-label" title={tree?.displayRoot ?? ""}>
+          <button
+            type="button"
+            className="directory-label"
+            title={tree?.displayRoot ?? ""}
+            aria-label="open pulse"
+            aria-pressed={viewMode === "pulse"}
+            onClick={() => {
+              hapticSelection();
+              enterPulse();
+            }}
+          >
             {tree?.displayRoot ?? "Loading…"}
-          </div>
+          </button>
         </div>
 
         <div
@@ -523,7 +564,9 @@ export function App() {
           </span>
         </div>
 
-        {tree && (
+        {viewMode === "pulse" ? (
+          <PulseView data={pulse} onOpenFile={onOpenFile} />
+        ) : tree ? (
           <>
             {viewMode === "list" ? (
               <SearchList
@@ -551,15 +594,22 @@ export function App() {
               />
             )}
           </>
-        )}
-        <ViewToggle mode={viewMode} onChange={setViewMode} hidden={searchOpen} />
-        <SearchBar
-          open={searchOpen}
-          query={searchQuery}
-          onQueryChange={setSearchQuery}
-          onOpen={() => setSearchOpen(true)}
-          onClose={onCloseSearch}
+        ) : null}
+        <ViewToggle
+          mode={viewMode}
+          onChange={setViewMode}
+          onExitPulse={exitPulse}
+          hidden={searchOpen}
         />
+        {viewMode !== "pulse" ? (
+          <SearchBar
+            open={searchOpen}
+            query={searchQuery}
+            onQueryChange={setSearchQuery}
+            onOpen={() => setSearchOpen(true)}
+            onClose={onCloseSearch}
+          />
+        ) : null}
         {statusMsg !== null && <div id="status">{statusMsg}</div>}
         <Sheet
           path={selectedFile}

@@ -1,9 +1,11 @@
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use chrono::{SecondsFormat, Utc};
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher as NotifyWatcher};
+use serde::Serialize;
 use tokio::sync::mpsc;
 
 const DEFAULT_IGNORED_TOP: &[&str] = &[
@@ -24,6 +26,43 @@ const DEFAULT_IGNORED_TOP: &[&str] = &[
     "target",
     "__pycache__",
 ];
+
+const RING_CAPACITY: usize = 100;
+
+#[derive(Serialize, Clone, Debug)]
+pub struct FsEvent {
+    pub path: String,
+    pub kind: &'static str,
+    pub ts: String,
+}
+
+#[derive(Default)]
+pub struct EventRing {
+    inner: Mutex<VecDeque<FsEvent>>,
+}
+
+impl EventRing {
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self {
+            inner: Mutex::new(VecDeque::with_capacity(RING_CAPACITY)),
+        })
+    }
+
+    fn push_many(&self, events: &[FsEvent]) {
+        let mut g = self.inner.lock().unwrap();
+        for ev in events {
+            if g.len() == RING_CAPACITY {
+                g.pop_front();
+            }
+            g.push_back(ev.clone());
+        }
+    }
+
+    pub fn snapshot(&self) -> Vec<FsEvent> {
+        let g = self.inner.lock().unwrap();
+        g.iter().cloned().collect()
+    }
+}
 
 pub struct Watcher {
     _main: RecommendedWatcher,
@@ -49,10 +88,20 @@ fn is_noise(basename: &str) -> bool {
     false
 }
 
+fn classify_kind(kind: &EventKind) -> &'static str {
+    match kind {
+        EventKind::Create(_) => "create",
+        EventKind::Remove(_) => "remove",
+        EventKind::Modify(_) => "modify",
+        _ => "other",
+    }
+}
+
 pub fn start(
     root: PathBuf,
     include_all: bool,
-    on_change: Arc<dyn Fn(Vec<String>) + Send + Sync>,
+    ring: Arc<EventRing>,
+    on_change: Arc<dyn Fn(Vec<FsEvent>) + Send + Sync>,
     on_refs_change: Option<Arc<dyn Fn() + Send + Sync>>,
 ) -> notify::Result<Watcher> {
     let debounce = Duration::from_millis(200);
@@ -62,7 +111,7 @@ pub fn start(
         DEFAULT_IGNORED_TOP.iter().map(|s| s.to_string()).collect()
     });
 
-    let (path_tx, mut path_rx) = mpsc::unbounded_channel::<String>();
+    let (path_tx, mut path_rx) = mpsc::unbounded_channel::<FsEvent>();
     let root_main = root.clone();
     let ignored_for_cb = ignored_owned.clone();
 
@@ -77,25 +126,35 @@ pub fn start(
             ) {
                 return;
             }
+            let kind = classify_kind(&event.kind);
+            let now = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
             for path in &event.paths {
-                if let Ok(rel) = path.strip_prefix(&root_main) {
-                    let hit = rel.components().any(|c| {
-                        c.as_os_str()
-                            .to_str()
-                            .map(|s| ignored_for_cb.contains(s))
-                            .unwrap_or(false)
-                    });
-                    if hit {
-                        continue;
-                    }
+                let rel = match path.strip_prefix(&root_main) {
+                    Ok(r) => r,
+                    Err(_) => continue,
+                };
+                let hit = rel.components().any(|c| {
+                    c.as_os_str()
+                        .to_str()
+                        .map(|s| ignored_for_cb.contains(s))
+                        .unwrap_or(false)
+                });
+                if hit {
+                    continue;
                 }
                 let basename = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
                 if is_noise(basename) {
                     continue;
                 }
-                if let Some(s) = path.to_str() {
-                    let _ = path_tx.send(s.to_string());
+                let rel_str = rel.to_string_lossy().replace('\\', "/");
+                if rel_str.is_empty() {
+                    continue;
                 }
+                let _ = path_tx.send(FsEvent {
+                    path: rel_str,
+                    kind,
+                    ts: now.clone(),
+                });
             }
         },
         notify::Config::default(),
@@ -103,26 +162,35 @@ pub fn start(
     main_watcher.watch(&root, RecursiveMode::Recursive)?;
 
     let on_change_task = on_change.clone();
+    let ring_for_task = ring.clone();
     tokio::spawn(async move {
-        let mut pending: HashSet<String> = HashSet::new();
+        let mut pending: Vec<FsEvent> = Vec::new();
+        let mut seen: HashSet<String> = HashSet::new();
         loop {
             let first = match path_rx.recv().await {
                 Some(p) => p,
                 None => return,
             };
-            pending.insert(first);
+            seen.insert(first.path.clone());
+            pending.push(first);
             loop {
                 tokio::select! {
                     v = path_rx.recv() => {
                         match v {
-                            Some(p) => { pending.insert(p); }
+                            Some(p) => {
+                                if seen.insert(p.path.clone()) {
+                                    pending.push(p);
+                                }
+                            }
                             None => return,
                         }
                     }
                     _ = tokio::time::sleep(debounce) => break,
                 }
             }
-            let drained: Vec<String> = pending.drain().collect();
+            let drained: Vec<FsEvent> = pending.drain(..).collect();
+            seen.clear();
+            ring_for_task.push_many(&drained);
             on_change_task(drained);
         }
     });

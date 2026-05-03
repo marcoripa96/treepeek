@@ -103,6 +103,80 @@ pub async fn last_commit(root: &Path) -> Option<CommitInfo> {
     })
 }
 
+pub async fn recent_commits(root: &Path, n: usize) -> Vec<CommitInfo> {
+    if !is_repo(root) {
+        return vec![];
+    }
+    let fmt = "%H%x1f%h%x1f%an%x1f%ae%x1f%aI%x1f%ar%x1f%s%x1f%b";
+    let pretty = format!("--pretty=format:{}", fmt);
+    let limit = format!("-{}", n.max(1));
+    let sep = "\x1e"; // record separator between commits
+    let pretty_with_sep = format!("{}%x1e", pretty);
+    let s = match run_git_text(&["log", &limit, &pretty_with_sep], root).await {
+        Some(s) => s,
+        None => return vec![],
+    };
+    let mut out = Vec::new();
+    for record in s.split(sep) {
+        let record = record.trim_matches(|c: char| c == '\n' || c == '\r');
+        if record.is_empty() {
+            continue;
+        }
+        let parts: Vec<&str> = record.split('\x1f').collect();
+        if parts.len() < 8 {
+            continue;
+        }
+        out.push(CommitInfo {
+            hash: parts[0].into(),
+            short_hash: parts[1].into(),
+            author: parts[2].into(),
+            email: parts[3].into(),
+            date: parts[4].into(),
+            relative_date: parts[5].into(),
+            subject: parts[6].into(),
+            body: parts[7].trim_end().into(),
+        });
+        if out.len() >= n {
+            break;
+        }
+    }
+    out
+}
+
+#[derive(Serialize, Clone, Debug, Default)]
+pub struct AheadBehind {
+    pub ahead: u32,
+    pub behind: u32,
+    pub upstream: Option<String>,
+}
+
+pub async fn ahead_behind(root: &Path) -> Option<AheadBehind> {
+    if !is_repo(root) {
+        return None;
+    }
+    let upstream = run_git_text(
+        &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+        root,
+    )
+    .await
+    .map(|s| s.trim().to_string())
+    .filter(|s| !s.is_empty());
+    let upstream = upstream?;
+    let counts = run_git_text(&["rev-list", "--count", "--left-right", "@{u}...HEAD"], root)
+        .await?;
+    let parts: Vec<&str> = counts.split_whitespace().collect();
+    if parts.len() != 2 {
+        return None;
+    }
+    let behind: u32 = parts[0].parse().ok()?;
+    let ahead: u32 = parts[1].parse().ok()?;
+    Some(AheadBehind {
+        ahead,
+        behind,
+        upstream: Some(upstream),
+    })
+}
+
 pub async fn current_branch(root: &Path) -> Option<String> {
     if !is_repo(root) {
         return None;

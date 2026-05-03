@@ -178,6 +178,36 @@ export async function fetchOutline(
   }
 }
 
+export interface FsEvent {
+  path: string;
+  kind: "create" | "remove" | "modify" | "other";
+  ts: string;
+}
+
+export interface AheadBehind {
+  ahead: number;
+  behind: number;
+  upstream: string | null;
+}
+
+export interface PulseResponse {
+  branch: string | null;
+  aheadBehind: AheadBehind | null;
+  dirtyCount: number;
+  recentCommits: CommitInfo[];
+  recentEvents: FsEvent[];
+}
+
+export async function fetchPulse(ws: number | null): Promise<PulseResponse | null> {
+  try {
+    const res = await fetch(withWs("/api/pulse", ws), { cache: "no-store" });
+    if (!res.ok) return null;
+    return (await res.json()) as PulseResponse;
+  } catch {
+    return null;
+  }
+}
+
 export interface DiffResponse {
   path: string;
   patch: string;

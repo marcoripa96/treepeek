@@ -31,6 +31,7 @@ use crate::push::{is_valid_subscription, PushManager, PushSubscriptionPayload};
 use crate::registry::list_instances;
 use crate::search::SearchService;
 use crate::walker::walk;
+use crate::watcher::EventRing;
 
 const TREE_CACHE_TTL: Duration = Duration::from_millis(5_000);
 const MAX_WALK_ENTRIES: usize = 50_000;
@@ -56,6 +57,7 @@ pub struct AppState {
     pub search: Option<Arc<SearchService>>,
     pub server_port: tokio::sync::OnceCell<u16>,
     pub sockets: Mutex<Vec<mpsc::UnboundedSender<String>>>,
+    pub fs_ring: Arc<EventRing>,
     tree_cache: RwLock<Option<(Instant, JsonValue)>>,
     history_cache: RwLock<Option<(Instant, Vec<GitHistoryEntry>)>>,
 }
@@ -74,6 +76,7 @@ impl AppState {
         push_manager: Arc<PushManager>,
         vapid_public_key: Option<String>,
         search: Option<Arc<SearchService>>,
+        fs_ring: Arc<EventRing>,
     ) -> Arc<Self> {
         Arc::new(Self {
             root,
@@ -91,6 +94,7 @@ impl AppState {
             search,
             server_port: tokio::sync::OnceCell::new(),
             sockets: Mutex::new(Vec::new()),
+            fs_ring,
             tree_cache: RwLock::new(None),
             history_cache: RwLock::new(None),
         })
@@ -509,7 +513,8 @@ async fn catch_all(State(state): State<SharedState>, req: Request<Body>) -> Resp
                 || path == "/api/file"
                 || path == "/api/diff"
                 || path == "/api/search"
-                || path == "/api/outline")
+                || path == "/api/outline"
+                || path == "/api/pulse")
         {
             return proxy_http(method, &path, &uri, pp, &state.token, cookie_header.as_deref())
                 .await;
@@ -518,6 +523,10 @@ async fn catch_all(State(state): State<SharedState>, req: Request<Body>) -> Resp
 
     if path == "/api/tree" {
         let data = compute_tree(&state).await;
+        return json_response(&data);
+    }
+    if path == "/api/pulse" {
+        let data = compute_pulse(&state).await;
         return json_response(&data);
     }
     if path == "/api/history" {
@@ -736,6 +745,32 @@ async fn compute_tree(state: &AppState) -> JsonValue {
         *g = Some((Instant::now(), value.clone()));
     }
     value
+}
+
+async fn compute_pulse(state: &AppState) -> JsonValue {
+    let (branch, ahead_behind, gs, recent_commits) = tokio::join!(
+        git::current_branch(&state.root),
+        git::ahead_behind(&state.root),
+        git::git_status(&state.root),
+        git::recent_commits(&state.root, 5),
+    );
+    let dirty_count = gs
+        .as_ref()
+        .map(|entries| {
+            entries
+                .iter()
+                .filter(|e| !matches!(e.status, git::GitStatus::Ignored))
+                .count()
+        })
+        .unwrap_or(0);
+    let recent_events = state.fs_ring.snapshot();
+    json!({
+        "branch": branch,
+        "aheadBehind": ahead_behind,
+        "dirtyCount": dirty_count,
+        "recentCommits": recent_commits,
+        "recentEvents": recent_events,
+    })
 }
 
 async fn compute_history(state: &AppState) -> Vec<GitHistoryEntry> {
