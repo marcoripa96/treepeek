@@ -195,7 +195,7 @@ function DevicesSection({ open }: { open: boolean }) {
     setBusy(true);
     setMessage(null);
     try {
-      const r = await registerPasskey();
+      const r = await registerPasskey({});
       hapticSuccess();
       setMessage(`Paired as “${r.name}”.`);
       await refresh();

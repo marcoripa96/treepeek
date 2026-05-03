@@ -185,9 +185,19 @@ export async function deleteDevice(id: number): Promise<boolean> {
   return r.ok;
 }
 
-export async function registerPasskey(name?: string): Promise<{ deviceId: number; name: string }> {
+export interface RegisterOptions {
+  name?: string;
+  /** Master token from the QR `?k=` param. Required for first-device pairing. */
+  pairingToken?: string;
+}
+
+export async function registerPasskey(
+  options?: RegisterOptions
+): Promise<{ deviceId: number; name: string }> {
   if (!isWebAuthnAvailable()) throw new Error("WebAuthn not available");
-  const startRes = await fetch("/api/auth/register/start", {
+  const { name, pairingToken } = options ?? {};
+  const qs = pairingToken ? `?k=${encodeURIComponent(pairingToken)}` : "";
+  const startRes = await fetch(`/api/auth/register/start${qs}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ name: name ?? null }),
@@ -203,7 +213,7 @@ export async function registerPasskey(name?: string): Promise<{ deviceId: number
   const opts = decodeCreationOptions(startJson.options);
   const cred = (await navigator.credentials.create(opts)) as PublicKeyCredential | null;
   if (!cred) throw new Error("registration cancelled");
-  const finishRes = await fetch("/api/auth/register/finish", {
+  const finishRes = await fetch(`/api/auth/register/finish${qs}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({

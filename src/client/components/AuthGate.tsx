@@ -3,18 +3,33 @@ import {
   fetchAuthStatus,
   isWebAuthnAvailable,
   loginWithPasskey,
+  registerPasskey,
   type AuthStatus,
 } from "../lib/webauthn";
 
 type Stage =
   | { kind: "checking" }
   | { kind: "logging-in" }
-  | { kind: "needs-pairing"; status: AuthStatus }
+  | { kind: "pairing" }
+  | { kind: "needs-qr" }
+  | { kind: "needs-passkey-or-qr"; status: AuthStatus }
   | { kind: "ready" }
   | { kind: "error"; message: string };
 
 interface Props {
   children: React.ReactNode;
+}
+
+function readPairingToken(): string | null {
+  const v = new URLSearchParams(location.search).get("k");
+  return v && v.length > 0 ? v : null;
+}
+
+function clearPairingTokenFromUrl() {
+  const u = new URL(location.href);
+  if (!u.searchParams.has("k")) return;
+  u.searchParams.delete("k");
+  history.replaceState(null, "", u.toString());
 }
 
 export function AuthGate({ children }: Props) {
@@ -30,23 +45,62 @@ export function AuthGate({ children }: Props) {
         return;
       }
       if (!status.authRequired || status.authenticated) {
+        clearPairingTokenFromUrl();
         setStage({ kind: "ready" });
         return;
       }
+
+      // Try passkey login first when this device already has a paired passkey.
       if (status.passkeyAvailable && status.deviceCount > 0 && isWebAuthnAvailable()) {
         setStage({ kind: "logging-in" });
         try {
           const ok = await loginWithPasskey();
           if (cancelled) return;
           if (ok) {
+            clearPairingTokenFromUrl();
             setStage({ kind: "ready" });
             return;
           }
         } catch {
-          // fall through
+          // fall through to pairing
         }
       }
-      setStage({ kind: "needs-pairing", status });
+
+      // No usable passkey on this device — fall back to pairing if we arrived
+      // here with the master token in the URL.
+      const pairingToken = readPairingToken();
+      if (
+        pairingToken &&
+        status.passkeyAvailable &&
+        isWebAuthnAvailable()
+      ) {
+        setStage({ kind: "pairing" });
+        try {
+          await registerPasskey({ pairingToken });
+          if (cancelled) return;
+          clearPairingTokenFromUrl();
+          setStage({ kind: "ready" });
+          return;
+        } catch (e) {
+          if (cancelled) return;
+          setStage({
+            kind: "error",
+            message:
+              e instanceof Error
+                ? `Pairing failed: ${e.message}`
+                : "Pairing failed.",
+          });
+          return;
+        }
+      }
+
+      // Either there's no master token, the platform doesn't support
+      // WebAuthn, or this transport doesn't expose passkey.
+      if (!status.passkeyAvailable) {
+        setStage({ kind: "needs-qr" });
+      } else {
+        setStage({ kind: "needs-passkey-or-qr", status });
+      }
     })();
     return () => {
       cancelled = true;
@@ -55,27 +109,47 @@ export function AuthGate({ children }: Props) {
 
   if (stage.kind === "ready") return <>{children}</>;
 
-  if (stage.kind === "checking" || stage.kind === "logging-in") {
+  if (stage.kind === "checking" || stage.kind === "logging-in" || stage.kind === "pairing") {
+    const label =
+      stage.kind === "logging-in"
+        ? "Unlocking with passkey…"
+        : stage.kind === "pairing"
+          ? "Pairing this device…"
+          : "Loading…";
     return (
       <div className="auth-gate">
         <div className="auth-gate-card">
           <div className="auth-gate-spinner" />
-          <p>{stage.kind === "logging-in" ? "Unlocking with passkey…" : "Loading…"}</p>
+          <p>{label}</p>
         </div>
       </div>
     );
   }
 
-  if (stage.kind === "needs-pairing") {
+  if (stage.kind === "needs-qr") {
+    return (
+      <div className="auth-gate">
+        <div className="auth-gate-card">
+          <h1>Scan the QR code</h1>
+          <p>
+            Open <code>treepeek</code> on the host and scan the QR code, or
+            visit the share URL on this device to pair it.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  if (stage.kind === "needs-passkey-or-qr") {
     return (
       <div className="auth-gate">
         <div className="auth-gate-card">
           <h1>Authentication required</h1>
           <p>
-            Open <code>treepeek</code> on the host and scan the QR code, or
-            visit the share URL once to pair this device with a passkey.
+            Use a paired passkey to unlock, or open <code>treepeek</code> on
+            the host and scan the QR code to pair this device.
           </p>
-          {stage.status.passkeyAvailable && stage.status.deviceCount > 0 ? (
+          {stage.status.deviceCount > 0 && isWebAuthnAvailable() ? (
             <button
               type="button"
               className="auth-gate-button"
@@ -84,11 +158,7 @@ export function AuthGate({ children }: Props) {
                 try {
                   const ok = await loginWithPasskey();
                   if (ok) setStage({ kind: "ready" });
-                  else
-                    setStage({
-                      kind: "needs-pairing",
-                      status: stage.status,
-                    });
+                  else setStage({ kind: "needs-passkey-or-qr", status: stage.status });
                 } catch (e) {
                   setStage({
                     kind: "error",
@@ -97,7 +167,7 @@ export function AuthGate({ children }: Props) {
                 }
               }}
             >
-              Try passkey again
+              Unlock with passkey
             </button>
           ) : null}
         </div>

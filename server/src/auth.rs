@@ -8,7 +8,6 @@ use rand::RngCore;
 use subtle::ConstantTimeEq;
 
 pub const COOKIE_NAME: &str = "tp_session";
-const COOKIE_MAX_AGE_SECONDS: u64 = 60 * 60 * 24 * 365;
 
 fn config_dir() -> PathBuf {
     let home = std::env::var("HOME").unwrap_or_default();
@@ -44,13 +43,6 @@ pub fn load_or_create_token(rotate: bool, override_token: Option<String>) -> std
         .open(token_file())?;
     file.write_all(fresh.as_bytes())?;
     Ok(fresh)
-}
-
-pub fn build_cookie_header(token: &str) -> String {
-    format!(
-        "{}={}; Path=/; HttpOnly; SameSite=Lax; Max-Age={}",
-        COOKIE_NAME, token, COOKIE_MAX_AGE_SECONDS
-    )
 }
 
 pub fn read_cookie(header: Option<&str>, name: &str) -> Option<String> {

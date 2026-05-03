@@ -19,7 +19,7 @@ use tokio::sync::{mpsc, Mutex, RwLock};
 use crate::assets::{
     EmbeddedAsset, CLIENT_ASSETS, ICON_PNG_192, ICON_PNG_512, ICON_SVG, SERVICE_WORKER_JS,
 };
-use crate::auth::{build_cookie_header, is_authenticated};
+use crate::auth::is_authenticated;
 use crate::device_store::DeviceStore;
 use crate::diff::get_file_diff;
 use crate::file::read_file_safe;
@@ -36,6 +36,7 @@ const TREE_CACHE_TTL: Duration = Duration::from_millis(5_000);
 const MAX_WALK_ENTRIES: usize = 50_000;
 pub const SESSION_TTL: Duration = Duration::from_secs(60 * 60 * 24 * 30);
 pub const SESSION_COOKIE: &str = "tp_session";
+pub const INTERNAL_HEADER: &str = "x-treepeek-internal";
 
 type SharedState = Arc<AppState>;
 
@@ -95,24 +96,49 @@ impl AppState {
         })
     }
 
+    /// Authenticated for data access — only via tailnet trust, valid session
+    /// cookie, or the internal proxy header. The master token (?k=) does NOT
+    /// grant data access; it only authorizes the pairing flow.
     pub fn request_authenticated(
         &self,
-        query_k: Option<&str>,
         cookie_header: Option<&str>,
+        internal_header: Option<&str>,
     ) -> bool {
         if !self.auth_required {
             return true;
         }
-        if is_authenticated(query_k, cookie_header, &self.token) {
-            return true;
+        if let Some(h) = internal_header {
+            if crate::auth::token_matches(Some(h), &self.token) {
+                return true;
+            }
         }
-        // Try cookie value as session id
         if let Some(sid) = crate::auth::read_cookie(cookie_header, SESSION_COOKIE) {
             if let Some(device_id) = self.device_store.validate_session(&sid) {
                 self.device_store.renew_session(&sid, SESSION_TTL);
                 self.device_store.touch_device(device_id);
                 return true;
             }
+        }
+        false
+    }
+
+    /// Authorized to pair a new device. Accepts the master token via ?k= or
+    /// cookie (the QR-handed credential), an existing valid session, or the
+    /// internal proxy header.
+    pub fn can_register_device(
+        &self,
+        query_k: Option<&str>,
+        cookie_header: Option<&str>,
+        internal_header: Option<&str>,
+    ) -> bool {
+        if !self.auth_required {
+            return true;
+        }
+        if self.request_authenticated(cookie_header, internal_header) {
+            return true;
+        }
+        if is_authenticated(query_k, cookie_header, &self.token) {
+            return true;
         }
         false
     }
@@ -151,8 +177,8 @@ async fn ws_handler(
     headers: HeaderMap,
 ) -> Response {
     let cookie = headers.get(header::COOKIE).and_then(|v| v.to_str().ok());
-    let q = params.get("k").map(|s| s.as_str());
-    if !state.request_authenticated(q, cookie) {
+    let internal = headers.get(INTERNAL_HEADER).and_then(|v| v.to_str().ok());
+    if !state.request_authenticated(cookie, internal) {
         return (StatusCode::UNAUTHORIZED, "unauthorized").into_response();
     }
     let peer_port: Option<u16> = params.get("ws").and_then(|s| s.parse().ok());
@@ -202,10 +228,8 @@ async fn proxy_ws(client: WebSocket, host: String, port: u16, token: String) {
         Ok(r) => r,
         Err(_) => return,
     };
-    req.headers_mut().insert(
-        "cookie",
-        format!("tp_session={}", token).parse().unwrap(),
-    );
+    req.headers_mut()
+        .insert(INTERNAL_HEADER, token.parse().unwrap());
     let peer = match tokio_tungstenite::connect_async(req).await {
         Ok((s, _)) => s,
         Err(_) => return,
@@ -334,22 +358,9 @@ async fn catch_all(State(state): State<SharedState>, req: Request<Body>) -> Resp
         );
     }
 
-    let q_k = query.get("k").map(|s| s.as_str());
-
-    // QR-bootstrap: if visiting /?k=<master-token>, mint a session and redirect.
-    if path == "/" && query.get("k").is_some() {
-        if state.request_authenticated(q_k, cookie_header.as_deref()) {
-            return Response::builder()
-                .status(StatusCode::SEE_OTHER)
-                .header(header::LOCATION, "/")
-                .header(header::SET_COOKIE, build_cookie_header(&state.token))
-                .body(Body::empty())
-                .unwrap();
-        }
-    }
-
     // Static client assets (HTML, JS, CSS, images) are public — they contain no
     // user data. The React app handles its own auth via /api/auth/* endpoints.
+    // The ?k= in URL is a pairing token for the WebAuthn registration flow only.
     let asset_path: &str = if path == "/index.html" { "/" } else { &path };
     if let Some(asset) = find_asset(asset_path) {
         return serve_asset(&req, asset);
@@ -363,8 +374,13 @@ async fn catch_all(State(state): State<SharedState>, req: Request<Body>) -> Resp
             .unwrap();
     }
 
-    // Everything below this line is data-bearing — gate behind auth.
-    if !state.request_authenticated(q_k, cookie_header.as_deref()) {
+    // Everything below this line is data-bearing — gate behind a real session.
+    let internal_header = req
+        .headers()
+        .get(INTERNAL_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
+    if !state.request_authenticated(cookie_header.as_deref(), internal_header.as_deref()) {
         return unauthorized(&req);
     }
 
@@ -776,7 +792,7 @@ async fn proxy_http(
         .method(method)
         .uri(url.clone())
         .header(header::HOST, format!("{}:{}", peer.host, peer.port))
-        .header(header::COOKIE, format!("tp_session={}", token));
+        .header(INTERNAL_HEADER, token);
     let outgoing = match req_builder.body(http_body_util::Empty::<hyper::body::Bytes>::new()) {
         Ok(r) => r,
         Err(_) => {
@@ -900,11 +916,14 @@ struct LoginFinishBody {
 
 async fn auth_register_start(
     State(state): State<SharedState>,
+    Query(params): Query<HashMap<String, String>>,
     headers: HeaderMap,
     Json(body): Json<RegisterStartBody>,
 ) -> Response {
     let cookie = headers.get(header::COOKIE).and_then(|v| v.to_str().ok());
-    if !state.request_authenticated(None, cookie) {
+    let internal = headers.get(INTERNAL_HEADER).and_then(|v| v.to_str().ok());
+    let q = params.get("k").map(|s| s.as_str());
+    if !state.can_register_device(q, cookie, internal) {
         return json_status(StatusCode::UNAUTHORIZED, json!({ "error": "unauthorized" }));
     }
     let Some(svc) = state.passkey.get() else {
@@ -937,11 +956,14 @@ async fn auth_register_start(
 
 async fn auth_register_finish(
     State(state): State<SharedState>,
+    Query(params): Query<HashMap<String, String>>,
     headers: HeaderMap,
     Json(body): Json<RegisterFinishBody>,
 ) -> Response {
     let cookie = headers.get(header::COOKIE).and_then(|v| v.to_str().ok());
-    if !state.request_authenticated(None, cookie) {
+    let internal = headers.get(INTERNAL_HEADER).and_then(|v| v.to_str().ok());
+    let q = params.get("k").map(|s| s.as_str());
+    if !state.can_register_device(q, cookie, internal) {
         return json_status(StatusCode::UNAUTHORIZED, json!({ "error": "unauthorized" }));
     }
     let Some(svc) = state.passkey.get() else {
@@ -1115,7 +1137,8 @@ async fn auth_logout(State(state): State<SharedState>, headers: HeaderMap) -> Re
 
 async fn auth_status(State(state): State<SharedState>, headers: HeaderMap) -> Response {
     let cookie = headers.get(header::COOKIE).and_then(|v| v.to_str().ok());
-    let authenticated = state.request_authenticated(None, cookie);
+    let internal = headers.get(INTERNAL_HEADER).and_then(|v| v.to_str().ok());
+    let authenticated = state.request_authenticated(cookie, internal);
     let passkey_available = state.passkey.get().is_some();
     let device_count = state.device_store.list_devices().len();
     json_response(&json!({
@@ -1128,7 +1151,8 @@ async fn auth_status(State(state): State<SharedState>, headers: HeaderMap) -> Re
 
 async fn list_devices(State(state): State<SharedState>, headers: HeaderMap) -> Response {
     let cookie = headers.get(header::COOKIE).and_then(|v| v.to_str().ok());
-    if !state.request_authenticated(None, cookie) {
+    let internal = headers.get(INTERNAL_HEADER).and_then(|v| v.to_str().ok());
+    if !state.request_authenticated(cookie, internal) {
         return json_status(StatusCode::UNAUTHORIZED, json!({ "error": "unauthorized" }));
     }
     let devices = state.device_store.list_devices();
@@ -1141,7 +1165,8 @@ async fn delete_device(
     Path(id): Path<i64>,
 ) -> Response {
     let cookie = headers.get(header::COOKIE).and_then(|v| v.to_str().ok());
-    if !state.request_authenticated(None, cookie) {
+    let internal = headers.get(INTERNAL_HEADER).and_then(|v| v.to_str().ok());
+    if !state.request_authenticated(cookie, internal) {
         return json_status(StatusCode::UNAUTHORIZED, json!({ "error": "unauthorized" }));
     }
     match state.device_store.delete_device(id) {
