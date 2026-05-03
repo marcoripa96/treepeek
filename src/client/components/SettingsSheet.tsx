@@ -224,6 +224,9 @@ function DevicesSection({ open }: { open: boolean }) {
     location.reload();
   };
 
+  const currentDeviceId = status.currentDeviceId;
+  const thisDevicePaired = currentDeviceId != null;
+
   return (
     <div className="settings-row settings-row-block">
       <span className="settings-label">Devices</span>
@@ -231,35 +234,46 @@ function DevicesSection({ open }: { open: boolean }) {
         {devices.length === 0 ? (
           <p className="settings-hint">No devices paired yet.</p>
         ) : (
-          devices.map((d) => (
-            <div key={d.id} className="device-row">
-              <div className="device-meta">
-                <div className="device-name">{d.name}</div>
-                <div className="device-time">
-                  Last seen {formatRelative(d.last_seen_at)}
-                </div>
-              </div>
-              <button
-                type="button"
-                className="device-revoke"
-                disabled={busy}
-                onClick={() => void onRevoke(d.id, d.name)}
+          devices.map((d) => {
+            const isThis = d.id === currentDeviceId;
+            return (
+              <div
+                key={d.id}
+                className={`device-row${isThis ? " device-row-current" : ""}`}
               >
-                Revoke
-              </button>
-            </div>
-          ))
+                <div className="device-meta">
+                  <div className="device-name">
+                    {d.name}
+                    {isThis ? <span className="device-badge">This device</span> : null}
+                  </div>
+                  <div className="device-time">
+                    Last seen {formatRelative(d.last_seen_at)}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  className="device-revoke"
+                  disabled={busy}
+                  onClick={() => void onRevoke(d.id, d.name)}
+                >
+                  Revoke
+                </button>
+              </div>
+            );
+          })
         )}
       </div>
       <div className="device-actions">
-        <button
-          type="button"
-          className="device-action-primary"
-          disabled={busy}
-          onClick={() => void onAddPasskey()}
-        >
-          Add passkey for this device
-        </button>
+        {!thisDevicePaired ? (
+          <button
+            type="button"
+            className="device-action-primary"
+            disabled={busy}
+            onClick={() => void onAddPasskey()}
+          >
+            Add passkey for this device
+          </button>
+        ) : null}
         <button
           type="button"
           className="device-action-secondary"

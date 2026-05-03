@@ -1141,11 +1141,14 @@ async fn auth_status(State(state): State<SharedState>, headers: HeaderMap) -> Re
     let authenticated = state.request_authenticated(cookie, internal);
     let passkey_available = state.passkey.get().is_some();
     let device_count = state.device_store.list_devices().len();
+    let current_device_id = crate::auth::read_cookie(cookie, SESSION_COOKIE)
+        .and_then(|sid| state.device_store.validate_session(&sid));
     json_response(&json!({
         "authenticated": authenticated,
         "authRequired": state.auth_required,
         "passkeyAvailable": passkey_available,
         "deviceCount": device_count,
+        "currentDeviceId": current_device_id,
     }))
 }
 

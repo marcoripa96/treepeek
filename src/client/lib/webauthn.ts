@@ -154,6 +154,7 @@ export interface AuthStatus {
   authRequired: boolean;
   passkeyAvailable: boolean;
   deviceCount: number;
+  currentDeviceId: number | null;
 }
 
 export async function fetchAuthStatus(): Promise<AuthStatus | null> {
