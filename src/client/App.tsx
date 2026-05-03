@@ -1,4 +1,10 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   fetchInstances,
   fetchHistory,
@@ -17,7 +23,7 @@ import { HistoryList } from "./components/HistoryList";
 import { PulseView } from "./components/PulseView";
 import { ViewToggle } from "./components/ViewToggle";
 import { SearchBar } from "./components/SearchBar";
-import { Sheet } from "./components/Sheet";
+import { FileView } from "./components/FileView";
 import { SettingsSheet } from "./components/SettingsSheet";
 import { Settings as SettingsIcon, SolarHamburgerMenuLinear } from "./components/icons";
 import { setThemeColor } from "./lib/themeColor";
@@ -564,54 +570,58 @@ export function App() {
           </span>
         </div>
 
-        {viewMode === "pulse" ? (
-          <PulseView data={pulse} onOpenFile={onOpenFile} />
-        ) : tree ? (
-          <>
-            {viewMode === "list" ? (
-              <SearchList
-                paths={visiblePaths}
-                query={activeQuery}
-                ws={currentWs}
-                gitStatus={tree.gitStatus}
-                onOpenFile={onOpenFile}
-                visible={true}
-              />
-            ) : viewMode === "folders" ? (
-              <FolderList
-                paths={visiblePaths}
-                query={activeQuery}
-                gitStatus={tree.gitStatus}
-                onOpenFile={onOpenFile}
-                visible={true}
-              />
-            ) : (
-              <HistoryList
-                entries={history}
-                query={activeQuery}
-                onOpenFile={onOpenFile}
-                visible={true}
-              />
-            )}
-          </>
-        ) : null}
-        <ViewToggle
-          mode={viewMode}
-          onChange={setViewMode}
-          onExitPulse={exitPulse}
-          hidden={searchOpen}
-        />
-        {viewMode !== "pulse" ? (
-          <SearchBar
-            open={searchOpen}
-            query={searchQuery}
-            onQueryChange={setSearchQuery}
-            onOpen={() => setSearchOpen(true)}
-            onClose={onCloseSearch}
+        <div className="directory-page">
+          {viewMode === "pulse" ? (
+            <PulseView data={pulse} onOpenFile={onOpenFile} />
+          ) : tree ? (
+            <>
+              {viewMode === "list" ? (
+                <SearchList
+                  paths={visiblePaths}
+                  query={activeQuery}
+                  ws={currentWs}
+                  gitStatus={tree.gitStatus}
+                  onOpenFile={onOpenFile}
+                  visible={true}
+                />
+              ) : viewMode === "folders" ? (
+                <FolderList
+                  paths={visiblePaths}
+                  query={activeQuery}
+                  gitStatus={tree.gitStatus}
+                  onOpenFile={onOpenFile}
+                  visible={true}
+                />
+              ) : (
+                <HistoryList
+                  entries={history}
+                  query={activeQuery}
+                  onOpenFile={onOpenFile}
+                  visible={true}
+                />
+              )}
+            </>
+          ) : null}
+          <ViewToggle
+            mode={viewMode}
+            onChange={setViewMode}
+            onExitPulse={exitPulse}
+            hidden={searchOpen}
           />
-        ) : null}
-        {statusMsg !== null && <div id="status">{statusMsg}</div>}
-        <Sheet
+          {viewMode !== "pulse" ? (
+            <SearchBar
+              open={searchOpen}
+              query={searchQuery}
+              onQueryChange={setSearchQuery}
+              onOpen={() => setSearchOpen(true)}
+              onClose={onCloseSearch}
+            />
+          ) : null}
+          {statusMsg !== null && <div id="status">{statusMsg}</div>}
+        </div>
+      </main>
+      {selectedFile !== null && (
+        <FileView
           path={selectedFile}
           ws={currentWs}
           hasDiff={selectedFileHasDiff}
@@ -620,7 +630,7 @@ export function App() {
           onNavigate={onOpenFile}
           onClose={onCloseFile}
         />
-      </main>
+      )}
       <SettingsSheet
         open={settingsOpen}
         settings={settings}

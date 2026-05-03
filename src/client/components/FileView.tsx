@@ -1,4 +1,11 @@
-import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
+import {
+  lazy,
+  Suspense,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   fetchFile,
   fetchOutline,
@@ -7,9 +14,9 @@ import {
 } from "../lib/api";
 import { formatSize } from "../lib/formatSize";
 import { highlightAsync } from "../lib/highlighter";
-import { hapticLight, hapticSelection } from "../lib/haptics";
+import { hapticSelection } from "../lib/haptics";
 import { formatLineHash, type LineRange } from "../lib/lineHash";
-import { ChevronDown, List as ListIcon, Share } from "./icons";
+import { ChevronDown, ChevronRight, List as ListIcon, Share } from "./icons";
 import { OutlinePanel } from "./OutlinePanel";
 
 const DiffView = lazy(() =>
@@ -17,7 +24,7 @@ const DiffView = lazy(() =>
 );
 
 interface Props {
-  path: string | null;
+  path: string;
   ws: number | null;
   hasDiff: boolean;
   lineRange: LineRange | null;
@@ -35,7 +42,7 @@ type RenderState =
   | { kind: "image"; mime: string; base64: string }
   | { kind: "unsupported"; reason: string; size: number };
 
-export function Sheet({
+export function FileView({
   path,
   ws,
   hasDiff,
@@ -50,9 +57,9 @@ export function Sheet({
   const [symbols, setSymbols] = useState<OutlineSymbol[]>([]);
   const [links, setLinks] = useState<OutlineLink[]>([]);
   const [outlineOpen, setOutlineOpen] = useState(false);
-  const sheetRef = useRef<HTMLElement | null>(null);
-  const handleRef = useRef<HTMLDivElement | null>(null);
   const bodyRef = useRef<HTMLDivElement | null>(null);
+  const rootRef = useRef<HTMLElement | null>(null);
+  const edgeRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     setMode("content");
@@ -61,9 +68,7 @@ export function Sheet({
     setLinks([]);
   }, [path]);
 
-  // Fetch outline whenever the file changes.
   useEffect(() => {
-    if (!path) return;
     const abort = new AbortController();
     (async () => {
       const data = await fetchOutline(path, ws, abort.signal);
@@ -79,7 +84,6 @@ export function Sheet({
   }, [hasDiff, mode]);
 
   useEffect(() => {
-    if (!path) return;
     setState({ kind: "loading" });
     const abort = new AbortController();
     (async () => {
@@ -121,44 +125,8 @@ export function Sheet({
     return () => abort.abort();
   }, [path, ws]);
 
-  useEffect(() => {
-    const handle = handleRef.current;
-    const sheet = sheetRef.current;
-    if (!handle || !sheet) return;
-    let dragStartY: number | null = null;
-    let dragOffset = 0;
-    const onPointerDown = (e: PointerEvent) => {
-      dragStartY = e.clientY;
-      dragOffset = 0;
-      handle.setPointerCapture(e.pointerId);
-    };
-    const onPointerMove = (e: PointerEvent) => {
-      if (dragStartY === null) return;
-      const dy = e.clientY - dragStartY;
-      if (dy < 0) return;
-      dragOffset = dy;
-      sheet.style.transform = `translateY(${dy}px)`;
-    };
-    const onPointerUp = () => {
-      if (dragStartY === null) return;
-      sheet.style.transform = "";
-      if (dragOffset > 100) {
-        hapticLight();
-        onClose();
-      }
-      dragStartY = null;
-      dragOffset = 0;
-    };
-    handle.addEventListener("pointerdown", onPointerDown);
-    handle.addEventListener("pointermove", onPointerMove);
-    handle.addEventListener("pointerup", onPointerUp);
-    return () => {
-      handle.removeEventListener("pointerdown", onPointerDown);
-      handle.removeEventListener("pointermove", onPointerMove);
-      handle.removeEventListener("pointerup", onPointerUp);
-    };
-  }, [onClose]);
-
+  // Keep horizontal/vertical bounce contained inside the body so the page
+  // itself doesn't scroll out from under the topbar on iOS Safari.
   useEffect(() => {
     const body = bodyRef.current;
     if (!body) return;
@@ -200,7 +168,6 @@ export function Sheet({
       body.removeEventListener("touchmove", onTouchMove);
     };
   }, []);
-
 
   // Tap / long-press a line number to set or extend the line range.
   useEffect(() => {
@@ -265,7 +232,6 @@ export function Sheet({
       didLongPress = false;
       if (n === null) return;
       if (wasLong) return;
-      // Tap: shift-click extends, plain click anchors.
       if (e.shiftKey && lineRange) {
         const anchor = lineRange.start;
         const start = Math.min(anchor, n);
@@ -297,8 +263,110 @@ export function Sheet({
     };
   }, [lineRange, onLineRangeChange]);
 
+  // Edge-swipe-from-left dismisses the file page. The root translates with the
+  // finger; on release, either snap back (cancel) or call onClose, which the
+  // App's startTransition turns into a nav-back view transition.
+  useEffect(() => {
+    const root = rootRef.current;
+    const edge = edgeRef.current;
+    if (!root || !edge) return;
+    const COMMIT_PX = 8;
+    const FLICK_VELOCITY = 0.4; // px/ms
+    let startX = 0;
+    let startY = 0;
+    let lastX = 0;
+    let lastT = 0;
+    let velocity = 0;
+    let committed = false;
+    let pointerId: number | null = null;
+
+    const reset = () => {
+      root.style.transition = "transform 200ms cubic-bezier(0.32, 0.72, 0, 1)";
+      root.style.transform = "";
+      const onEnd = () => {
+        root.style.transition = "";
+        root.removeEventListener("transitionend", onEnd);
+      };
+      root.addEventListener("transitionend", onEnd);
+      window.setTimeout(onEnd, 280);
+    };
+
+    const onPointerDown = (e: PointerEvent) => {
+      if (e.pointerType === "mouse" && e.button !== 0) return;
+      pointerId = e.pointerId;
+      startX = lastX = e.clientX;
+      startY = e.clientY;
+      lastT = e.timeStamp;
+      velocity = 0;
+      committed = false;
+    };
+
+    const onPointerMove = (e: PointerEvent) => {
+      if (pointerId === null || e.pointerId !== pointerId) return;
+      const dx = e.clientX - startX;
+      const dy = e.clientY - startY;
+      if (!committed) {
+        if (Math.abs(dx) < COMMIT_PX && Math.abs(dy) < COMMIT_PX) return;
+        if (Math.abs(dy) > Math.abs(dx) || dx <= 0) {
+          pointerId = null;
+          return;
+        }
+        committed = true;
+        try {
+          edge.setPointerCapture(e.pointerId);
+        } catch {}
+        root.style.transition = "none";
+      }
+      const nextX = Math.max(0, dx);
+      root.style.transform = `translate3d(${nextX}px, 0, 0)`;
+      const dt = e.timeStamp - lastT;
+      if (dt > 0) {
+        velocity = (e.clientX - lastX) / dt;
+        lastX = e.clientX;
+        lastT = e.timeStamp;
+      }
+      e.preventDefault();
+    };
+
+    const onPointerEnd = (e: PointerEvent) => {
+      if (pointerId === null || e.pointerId !== pointerId) return;
+      const dx = lastX - startX;
+      pointerId = null;
+      if (!committed) return;
+      committed = false;
+      const width = window.innerWidth;
+      const flicked = velocity > FLICK_VELOCITY;
+      const past = dx > width * 0.35;
+      if (flicked || past) {
+        // Let onClose's startTransition drive the slide-out. We keep the
+        // current translated position so the view-transition snapshot picks up
+        // from where the finger left off.
+        onClose();
+      } else {
+        reset();
+      }
+    };
+
+    const onPointerCancel = (e: PointerEvent) => {
+      if (pointerId !== null && e.pointerId !== pointerId) return;
+      if (committed) reset();
+      pointerId = null;
+      committed = false;
+    };
+
+    edge.addEventListener("pointerdown", onPointerDown);
+    edge.addEventListener("pointermove", onPointerMove);
+    edge.addEventListener("pointerup", onPointerEnd);
+    edge.addEventListener("pointercancel", onPointerCancel);
+    return () => {
+      edge.removeEventListener("pointerdown", onPointerDown);
+      edge.removeEventListener("pointermove", onPointerMove);
+      edge.removeEventListener("pointerup", onPointerEnd);
+      edge.removeEventListener("pointercancel", onPointerCancel);
+    };
+  }, [onClose]);
+
   const onCopyPath = async () => {
-    if (!path) return;
     hapticSelection();
     try {
       await navigator.clipboard.writeText(path);
@@ -310,7 +378,6 @@ export function Sheet({
   };
 
   const onShare = async () => {
-    if (!path) return;
     const url = new URL(location.origin);
     url.searchParams.set("file", path);
     url.hash = formatLineHash(lineRange);
@@ -335,114 +402,116 @@ export function Sheet({
     }
   };
 
-  const open = path !== null;
   return (
-    <>
+    <section
+      id="file-view"
+      className="file-view"
+      aria-label="file viewer"
+      ref={rootRef}
+    >
       <div
-        id="sheet-backdrop"
-        className={open ? "open" : undefined}
-        onClick={() => {
-          hapticLight();
-          onClose();
-        }}
+        className="file-view-edge-swipe"
+        ref={edgeRef}
+        aria-hidden="true"
       />
-      <aside
-        id="sheet"
-        ref={sheetRef}
-        className={open ? "open" : undefined}
-        aria-hidden={!open}
-      >
-        <div className="sheet-handle" ref={handleRef} aria-label="Drag to dismiss" />
-        <header className="sheet-header">
+      <header className="file-view-header">
+        <button
+          type="button"
+          className="file-back-btn"
+          aria-label="back to list"
+          onClick={() => {
+            hapticSelection();
+            onClose();
+          }}
+        >
+          <ChevronRight width={20} height={20} className="file-back-chevron" />
+        </button>
+        <button
+          type="button"
+          className="file-path-btn"
+          aria-label="copy file path"
+          onClick={onCopyPath}
+        >
+          {path}
+        </button>
+        {symbols.length > 0 && mode === "content" && (
           <button
             type="button"
-            className="sheet-title"
-            aria-label="copy file path"
-            onClick={onCopyPath}
-          >
-            {path ?? ""}
-          </button>
-          {symbols.length > 0 && mode === "content" && (
-            <button
-              type="button"
-              className="sheet-outline-btn"
-              aria-pressed={outlineOpen}
-              aria-label="toggle outline"
-              onClick={() => {
-                hapticSelection();
-                setOutlineOpen((o) => !o);
-              }}
-            >
-              <ListIcon width={16} height={16} />
-              <span className="outline-count">{symbols.length}</span>
-              <ChevronDown
-                width={14}
-                height={14}
-                className={
-                  "outline-chevron" + (outlineOpen ? " open" : "")
-                }
-              />
-            </button>
-          )}
-          {hasDiff && (
-            <button
-              type="button"
-              className="sheet-diff-btn"
-              aria-pressed={mode === "diff"}
-              aria-label="toggle diff view"
-              onClick={() => {
-                hapticSelection();
-                setMode((m) => (m === "diff" ? "content" : "diff"));
-              }}
-            >
-              Diff
-            </button>
-          )}
-          <button
-            type="button"
-            className="sheet-share-btn"
-            aria-label="share link to this file"
-            onClick={onShare}
-          >
-            <Share width={18} height={18} />
-          </button>
-        </header>
-        {outlineOpen && symbols.length > 0 && mode === "content" && (
-          <OutlinePanel
-            symbols={symbols}
-            activeLine={lineRange?.start ?? null}
-            onJump={(line) => {
+            className="sheet-outline-btn"
+            aria-pressed={outlineOpen}
+            aria-label="toggle outline"
+            onClick={() => {
               hapticSelection();
-              onLineRangeChange({ start: line, end: line });
-              setOutlineOpen(false);
+              setOutlineOpen((o) => !o);
             }}
+          >
+            <ListIcon width={16} height={16} />
+            <span className="outline-count">{symbols.length}</span>
+            <ChevronDown
+              width={14}
+              height={14}
+              className={"outline-chevron" + (outlineOpen ? " open" : "")}
+            />
+          </button>
+        )}
+        {hasDiff && (
+          <button
+            type="button"
+            className="sheet-diff-btn"
+            aria-pressed={mode === "diff"}
+            aria-label="toggle diff view"
+            onClick={() => {
+              hapticSelection();
+              setMode((m) => (m === "diff" ? "content" : "diff"));
+            }}
+          >
+            Diff
+          </button>
+        )}
+        <button
+          type="button"
+          className="sheet-share-btn"
+          aria-label="share link to this file"
+          onClick={onShare}
+        >
+          <Share width={18} height={18} />
+        </button>
+      </header>
+      {outlineOpen && symbols.length > 0 && mode === "content" && (
+        <OutlinePanel
+          symbols={symbols}
+          activeLine={lineRange?.start ?? null}
+          onJump={(line) => {
+            hapticSelection();
+            onLineRangeChange({ start: line, end: line });
+            setOutlineOpen(false);
+          }}
+        />
+      )}
+      <div className="sheet-body" ref={bodyRef}>
+        {mode === "diff" ? (
+          <Suspense fallback={null}>
+            <DiffView path={path} ws={ws} />
+          </Suspense>
+        ) : (
+          <FileBody
+            state={state}
+            lineRange={lineRange}
+            links={links}
+            onNavigate={onNavigate}
           />
         )}
-        <div className="sheet-body" ref={bodyRef}>
-          {mode === "diff" && path ? (
-            <Suspense fallback={null}>
-              <DiffView path={path} ws={ws} />
-            </Suspense>
-          ) : (
-            <SheetBody
-              state={state}
-              lineRange={lineRange}
-              links={links}
-              onNavigate={onNavigate}
-            />
-          )}
+      </div>
+      {shareToast !== null && (
+        <div className="sheet-toast" role="status">
+          {shareToast}
         </div>
-        {shareToast !== null && (
-          <div className="sheet-toast" role="status">
-            {shareToast}
-          </div>
-        )}
-      </aside>
-    </>
+      )}
+    </section>
   );
 }
 
-function SheetBody({
+function FileBody({
   state,
   lineRange,
   links,
@@ -455,7 +524,7 @@ function SheetBody({
 }) {
   switch (state.kind) {
     case "loading":
-      return null;
+      return <div className="sheet-empty">Loading…</div>;
     case "error":
       return <div className="sheet-empty">{state.message}</div>;
     case "image":
@@ -515,7 +584,6 @@ function TextRender({
     };
   }, [content, path]);
 
-  // Apply highlight class to lines inside the active range.
   useEffect(() => {
     const host = hostRef.current;
     if (!host) return;
@@ -529,8 +597,6 @@ function TextRender({
     }
   }, [lineRange, highlighted, content]);
 
-  // Stamp data-import-target on linkable lines so CSS + click delegation can
-  // pick them up across re-renders (plain → highlighted handoff).
   useEffect(() => {
     const host = hostRef.current;
     if (!host) return;
@@ -546,7 +612,6 @@ function TextRender({
     }
   }, [linkByLine, highlighted, content]);
 
-  // Click delegation for import jumps. Skips clicks on the line-number column.
   useEffect(() => {
     const host = hostRef.current;
     if (!host) return;
@@ -568,7 +633,6 @@ function TextRender({
     return () => host.removeEventListener("click", onClick);
   }, [onNavigate]);
 
-  // Scroll the anchor line into view when the file/range changes.
   useEffect(() => {
     const host = hostRef.current;
     if (!host || !lineRange) return;
