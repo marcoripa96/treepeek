@@ -185,8 +185,10 @@ async fn run(opts: CliOptions) -> Result<(), String> {
     }
     let bind = bind.unwrap();
 
-    let history_store =
-        Arc::new(HistoryStore::open(&root).map_err(|e| format!("history db: {}", e))?);
+    let history_store = Arc::new(
+        HistoryStore::open(&root, &history_db_path(&root))
+            .map_err(|e| format!("history db: {}", e))?,
+    );
 
     let mut vapid_public_key: Option<String> = None;
     let push_manager = match PushManager::new(root_str.clone()) {
@@ -441,7 +443,7 @@ async fn run(opts: CliOptions) -> Result<(), String> {
     Ok(())
 }
 
-fn frecency_db_path(root: &std::path::Path) -> Option<PathBuf> {
+fn per_root_cache_dir(root: &std::path::Path) -> Option<PathBuf> {
     let cache = std::env::var("XDG_CACHE_HOME")
         .ok()
         .map(PathBuf::from)
@@ -451,7 +453,17 @@ fn frecency_db_path(root: &std::path::Path) -> Option<PathBuf> {
     for b in abs.bytes() {
         h = h.wrapping_mul(33).wrapping_add(b as u64);
     }
-    Some(cache.join("treepeek").join(format!("{:016x}", h)).join("frecency"))
+    Some(cache.join("treepeek").join(format!("{:016x}", h)))
+}
+
+fn frecency_db_path(root: &std::path::Path) -> Option<PathBuf> {
+    Some(per_root_cache_dir(root)?.join("frecency"))
+}
+
+fn history_db_path(root: &std::path::Path) -> PathBuf {
+    per_root_cache_dir(root)
+        .map(|d| d.join("history.sqlite"))
+        .unwrap_or_else(|| PathBuf::from("/tmp/treepeek-history.sqlite"))
 }
 
 fn relative_changed(root: &std::path::Path, paths: &[String]) -> Vec<String> {

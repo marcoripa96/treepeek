@@ -6,23 +6,17 @@ use rusqlite::{params, Connection};
 
 use crate::git::{GitHistoryEntry, GitHistoryStatus, GitStatus, GitStatusEntry};
 
-const DB_NAME: &str = ".treepeek-history.sqlite";
-
-pub fn is_history_db_file(name: &str) -> bool {
-    name == DB_NAME
-        || name == ".treepeek-history.sqlite-wal"
-        || name == ".treepeek-history.sqlite-shm"
-}
-
 pub struct HistoryStore {
     root: PathBuf,
     conn: Mutex<Connection>,
 }
 
 impl HistoryStore {
-    pub fn open(root: &Path) -> rusqlite::Result<Self> {
-        let path = root.join(DB_NAME);
-        let conn = Connection::open(&path)?;
+    pub fn open(root: &Path, db_path: &Path) -> rusqlite::Result<Self> {
+        if let Some(parent) = db_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let conn = Connection::open(db_path)?;
         conn.execute_batch(
             "PRAGMA journal_mode = WAL;
              CREATE TABLE IF NOT EXISTS history_events (
@@ -53,14 +47,12 @@ impl HistoryStore {
                 Err(_) => continue,
             };
             let rel = rel_pb.to_string_lossy().replace('\\', "/");
-            if rel.is_empty() || rel.starts_with("..") || is_history_db_file(&rel) {
+            if rel.is_empty() || rel.starts_with("..") {
                 continue;
             }
-            let base = rel.rsplit('/').next().unwrap_or(rel.as_str());
-            if is_history_db_file(base) || seen.contains(&rel) {
+            if !seen.insert(rel.clone()) {
                 continue;
             }
-            seen.insert(rel.clone());
             let exists = abs_path.exists();
             let status = if exists { "modified" } else { "deleted" };
             let subject = if exists { "Edited file" } else { "Deleted file" };

@@ -6,8 +6,6 @@ use std::time::Duration;
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher as NotifyWatcher};
 use tokio::sync::mpsc;
 
-const HISTORY_DB_NAME: &str = ".treepeek-history.sqlite";
-
 const DEFAULT_IGNORED_TOP: &[&str] = &[
     ".git",
     "node_modules",
@@ -46,12 +44,6 @@ fn is_noise(basename: &str) -> bool {
         return true;
     }
     if basename.starts_with(".#") {
-        return true;
-    }
-    if basename == HISTORY_DB_NAME
-        || basename == ".treepeek-history.sqlite-wal"
-        || basename == ".treepeek-history.sqlite-shm"
-    {
         return true;
     }
     false
