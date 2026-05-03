@@ -1434,25 +1434,21 @@ body {
   justify-content: space-between;
   padding: 8px 12px;
   background: rgba(0, 0, 0, 0.04);
+  border: 1px solid transparent;
   border-radius: 8px;
 }
 
 .device-row-current {
-  background: rgba(37, 99, 235, 0.1);
+  background: var(--selected);
+  border-color: var(--border);
 }
 
-.device-badge {
-  display: inline-block;
-  margin-left: 6px;
-  padding: 1px 6px;
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  text-transform: uppercase;
-  color: #1d4ed8;
-  background: rgba(37, 99, 235, 0.15);
-  border-radius: 4px;
-  vertical-align: middle;
+.device-current-icon {
+  width: 14px;
+  height: 14px;
+  margin-right: 6px;
+  vertical-align: -2px;
+  color: var(--fg);
 }
 
 .device-meta {

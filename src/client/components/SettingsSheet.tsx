@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import type { Settings, UpdateSettings, ViewMode } from "../lib/settings";
 import { pushSupported, subscribePush, unsubscribePush } from "../lib/push";
-import { CloseCircle } from "./icons";
+import { CloseCircle, DeviceMobile } from "./icons";
 import { hapticLight, hapticSelection, hapticSuccess, hapticError } from "../lib/haptics";
 import {
   deleteDevice,
@@ -243,8 +243,13 @@ function DevicesSection({ open }: { open: boolean }) {
               >
                 <div className="device-meta">
                   <div className="device-name">
+                    {isThis ? (
+                      <DeviceMobile
+                        className="device-current-icon"
+                        aria-label="This device"
+                      />
+                    ) : null}
                     {d.name}
-                    {isThis ? <span className="device-badge">This device</span> : null}
                   </div>
                   <div className="device-time">
                     Last seen {formatRelative(d.last_seen_at)}
