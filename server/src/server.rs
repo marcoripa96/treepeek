@@ -5,11 +5,11 @@ use std::time::{Duration, Instant};
 
 use axum::body::Body;
 use axum::extract::ws::{Message as WsMessage, WebSocket, WebSocketUpgrade};
-use axum::extract::{Query, State};
+use axum::extract::{Path, Query, State};
 use axum::http::{header, HeaderMap, Method, Request, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::routing::get;
-use axum::Router;
+use axum::routing::{delete, get, post};
+use axum::{Json, Router};
 use futures_util::{SinkExt, StreamExt};
 use http_body_util::BodyExt;
 use serde::Deserialize;
@@ -20,11 +20,13 @@ use crate::assets::{
     EmbeddedAsset, CLIENT_ASSETS, ICON_PNG_192, ICON_PNG_512, ICON_SVG, SERVICE_WORKER_JS,
 };
 use crate::auth::{build_cookie_header, is_authenticated};
+use crate::device_store::DeviceStore;
 use crate::diff::get_file_diff;
 use crate::file::read_file_safe;
 use crate::git::{self, GitHistoryEntry};
 use crate::history::HistoryStore;
 use crate::outline;
+use crate::passkey::PasskeyService;
 use crate::push::{is_valid_subscription, PushManager, PushSubscriptionPayload};
 use crate::registry::list_instances;
 use crate::search::SearchService;
@@ -32,6 +34,8 @@ use crate::walker::walk;
 
 const TREE_CACHE_TTL: Duration = Duration::from_millis(5_000);
 const MAX_WALK_ENTRIES: usize = 50_000;
+pub const SESSION_TTL: Duration = Duration::from_secs(60 * 60 * 24 * 30);
+pub const SESSION_COOKIE: &str = "tp_session";
 
 type SharedState = Arc<AppState>;
 
@@ -41,8 +45,11 @@ pub struct AppState {
     pub display_root: String,
     pub include_all: bool,
     pub token: String,
+    pub auth_required: bool,
     pub manifest_json: String,
     pub history_store: Arc<HistoryStore>,
+    pub device_store: Arc<DeviceStore>,
+    pub passkey: tokio::sync::OnceCell<Arc<PasskeyService>>,
     pub push_manager: Arc<PushManager>,
     pub vapid_public_key: Option<String>,
     pub search: Option<Arc<SearchService>>,
@@ -59,8 +66,10 @@ impl AppState {
         display_root: String,
         include_all: bool,
         token: String,
+        auth_required: bool,
         manifest_json: String,
         history_store: Arc<HistoryStore>,
+        device_store: Arc<DeviceStore>,
         push_manager: Arc<PushManager>,
         vapid_public_key: Option<String>,
         search: Option<Arc<SearchService>>,
@@ -71,8 +80,11 @@ impl AppState {
             display_root,
             include_all,
             token,
+            auth_required,
             manifest_json,
             history_store,
+            device_store,
+            passkey: tokio::sync::OnceCell::new(),
             push_manager,
             vapid_public_key,
             search,
@@ -81,6 +93,28 @@ impl AppState {
             tree_cache: RwLock::new(None),
             history_cache: RwLock::new(None),
         })
+    }
+
+    pub fn request_authenticated(
+        &self,
+        query_k: Option<&str>,
+        cookie_header: Option<&str>,
+    ) -> bool {
+        if !self.auth_required {
+            return true;
+        }
+        if is_authenticated(query_k, cookie_header, &self.token) {
+            return true;
+        }
+        // Try cookie value as session id
+        if let Some(sid) = crate::auth::read_cookie(cookie_header, SESSION_COOKIE) {
+            if let Some(device_id) = self.device_store.validate_session(&sid) {
+                self.device_store.renew_session(&sid, SESSION_TTL);
+                self.device_store.touch_device(device_id);
+                return true;
+            }
+        }
+        false
     }
 
     pub async fn invalidate_caches(&self) {
@@ -98,6 +132,14 @@ impl AppState {
 pub fn build_router(state: SharedState) -> Router {
     Router::new()
         .route("/ws", get(ws_handler))
+        .route("/api/auth/register/start", post(auth_register_start))
+        .route("/api/auth/register/finish", post(auth_register_finish))
+        .route("/api/auth/login/start", post(auth_login_start))
+        .route("/api/auth/login/finish", post(auth_login_finish))
+        .route("/api/auth/logout", post(auth_logout))
+        .route("/api/auth/status", get(auth_status))
+        .route("/api/devices", get(list_devices))
+        .route("/api/devices/:id", delete(delete_device))
         .fallback(catch_all)
         .with_state(state)
 }
@@ -110,7 +152,7 @@ async fn ws_handler(
 ) -> Response {
     let cookie = headers.get(header::COOKIE).and_then(|v| v.to_str().ok());
     let q = params.get("k").map(|s| s.as_str());
-    if !is_authenticated(q, cookie, &state.token) {
+    if !state.request_authenticated(q, cookie) {
         return (StatusCode::UNAUTHORIZED, "unauthorized").into_response();
     }
     let peer_port: Option<u16> = params.get("ws").and_then(|s| s.parse().ok());
@@ -293,19 +335,21 @@ async fn catch_all(State(state): State<SharedState>, req: Request<Body>) -> Resp
     }
 
     let q_k = query.get("k").map(|s| s.as_str());
-    if !is_authenticated(q_k, cookie_header.as_deref(), &state.token) {
-        return unauthorized(&req);
-    }
 
+    // QR-bootstrap: if visiting /?k=<master-token>, mint a session and redirect.
     if path == "/" && query.get("k").is_some() {
-        return Response::builder()
-            .status(StatusCode::SEE_OTHER)
-            .header(header::LOCATION, "/")
-            .header(header::SET_COOKIE, build_cookie_header(&state.token))
-            .body(Body::empty())
-            .unwrap();
+        if state.request_authenticated(q_k, cookie_header.as_deref()) {
+            return Response::builder()
+                .status(StatusCode::SEE_OTHER)
+                .header(header::LOCATION, "/")
+                .header(header::SET_COOKIE, build_cookie_header(&state.token))
+                .body(Body::empty())
+                .unwrap();
+        }
     }
 
+    // Static client assets (HTML, JS, CSS, images) are public — they contain no
+    // user data. The React app handles its own auth via /api/auth/* endpoints.
     let asset_path: &str = if path == "/index.html" { "/" } else { &path };
     if let Some(asset) = find_asset(asset_path) {
         return serve_asset(&req, asset);
@@ -317,6 +361,11 @@ async fn catch_all(State(state): State<SharedState>, req: Request<Body>) -> Resp
             .header(header::CACHE_CONTROL, "no-cache")
             .body(Body::from(SERVICE_WORKER_JS))
             .unwrap();
+    }
+
+    // Everything below this line is data-bearing — gate behind auth.
+    if !state.request_authenticated(q_k, cookie_header.as_deref()) {
+        return unauthorized(&req);
     }
 
     if path == "/api/push/key" {
@@ -776,3 +825,331 @@ async fn proxy_http(
     }
 }
 
+// ---------- Auth / passkey handlers ----------
+
+fn build_session_cookie(sid: &str, ttl_secs: u64) -> String {
+    format!(
+        "{}={}; Path=/; HttpOnly; SameSite=Lax; Max-Age={}",
+        SESSION_COOKIE, sid, ttl_secs
+    )
+}
+
+fn build_session_clear_cookie() -> String {
+    format!("{}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0", SESSION_COOKIE)
+}
+
+fn json_status(status: StatusCode, value: serde_json::Value) -> Response {
+    (status, json_response(&value)).into_response()
+}
+
+fn auto_device_name(headers: &HeaderMap) -> String {
+    let ua = headers
+        .get(header::USER_AGENT)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    let platform = if ua.contains("iPhone") {
+        "iPhone"
+    } else if ua.contains("iPad") {
+        "iPad"
+    } else if ua.contains("Macintosh") {
+        "Mac"
+    } else if ua.contains("Android") {
+        "Android"
+    } else if ua.contains("Windows") {
+        "Windows"
+    } else if ua.contains("Linux") {
+        "Linux"
+    } else {
+        "Device"
+    };
+    let browser = if ua.contains("CriOS") || ua.contains("Chrome") {
+        " · Chrome"
+    } else if ua.contains("Firefox") {
+        " · Firefox"
+    } else if ua.contains("Edg") {
+        " · Edge"
+    } else if ua.contains("Safari") {
+        " · Safari"
+    } else {
+        ""
+    };
+    format!("{}{}", platform, browser)
+}
+
+#[derive(Deserialize)]
+struct RegisterStartBody {
+    #[serde(default)]
+    name: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct RegisterFinishBody {
+    #[serde(rename = "challengeId")]
+    challenge_id: String,
+    credential: serde_json::Value,
+    #[serde(default)]
+    name: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct LoginFinishBody {
+    #[serde(rename = "challengeId")]
+    challenge_id: String,
+    credential: serde_json::Value,
+}
+
+async fn auth_register_start(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+    Json(body): Json<RegisterStartBody>,
+) -> Response {
+    let cookie = headers.get(header::COOKIE).and_then(|v| v.to_str().ok());
+    if !state.request_authenticated(None, cookie) {
+        return json_status(StatusCode::UNAUTHORIZED, json!({ "error": "unauthorized" }));
+    }
+    let Some(svc) = state.passkey.get() else {
+        return json_status(
+            StatusCode::SERVICE_UNAVAILABLE,
+            json!({ "error": "passkey unavailable on this transport" }),
+        );
+    };
+    let name = body
+        .name
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| auto_device_name(&headers));
+    let user_uuid = uuid::Uuid::new_v4();
+    let exclude = state.device_store.all_credential_ids();
+    let exclude_creds = exclude
+        .into_iter()
+        .map(webauthn_rs::prelude::CredentialID::from)
+        .collect::<Vec<_>>();
+    match svc.start_registration(user_uuid, &name, &name, exclude_creds) {
+        Ok((challenge_id, options)) => json_response(&json!({
+            "challengeId": challenge_id,
+            "options": options,
+        })),
+        Err(e) => json_status(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            json!({ "error": format!("{}", e) }),
+        ),
+    }
+}
+
+async fn auth_register_finish(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+    Json(body): Json<RegisterFinishBody>,
+) -> Response {
+    let cookie = headers.get(header::COOKIE).and_then(|v| v.to_str().ok());
+    if !state.request_authenticated(None, cookie) {
+        return json_status(StatusCode::UNAUTHORIZED, json!({ "error": "unauthorized" }));
+    }
+    let Some(svc) = state.passkey.get() else {
+        return json_status(
+            StatusCode::SERVICE_UNAVAILABLE,
+            json!({ "error": "passkey unavailable on this transport" }),
+        );
+    };
+    let cred: webauthn_rs::prelude::RegisterPublicKeyCredential =
+        match serde_json::from_value(body.credential) {
+            Ok(c) => c,
+            Err(e) => {
+                return json_status(
+                    StatusCode::BAD_REQUEST,
+                    json!({ "error": format!("bad credential: {}", e) }),
+                );
+            }
+        };
+    let (user_uuid, default_name, passkey) = match svc.finish_registration(&body.challenge_id, &cred) {
+        Ok(t) => t,
+        Err(e) => {
+            return json_status(
+                StatusCode::BAD_REQUEST,
+                json!({ "error": format!("{}", e) }),
+            );
+        }
+    };
+    let name = body
+        .name
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or(default_name);
+    let cred_id = passkey.cred_id().as_ref().to_vec();
+    let device_id = match state
+        .device_store
+        .add_device(user_uuid.as_bytes(), &cred_id, &name, &passkey)
+    {
+        Ok(id) => id,
+        Err(e) => {
+            return json_status(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                json!({ "error": format!("device store: {}", e) }),
+            );
+        }
+    };
+    let sid = match state
+        .device_store
+        .create_session(device_id, SESSION_TTL)
+    {
+        Ok(s) => s,
+        Err(e) => {
+            return json_status(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                json!({ "error": format!("session: {}", e) }),
+            );
+        }
+    };
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::SET_COOKIE, build_session_cookie(&sid, SESSION_TTL.as_secs()))
+        .body(Body::from(
+            json!({ "deviceId": device_id, "name": name }).to_string(),
+        ))
+        .unwrap()
+}
+
+async fn auth_login_start(State(state): State<SharedState>) -> Response {
+    let Some(svc) = state.passkey.get() else {
+        return json_status(
+            StatusCode::SERVICE_UNAVAILABLE,
+            json!({ "error": "passkey unavailable on this transport" }),
+        );
+    };
+    let passkeys = state.device_store.all_passkeys();
+    if passkeys.is_empty() {
+        return json_status(
+            StatusCode::PRECONDITION_FAILED,
+            json!({ "error": "no devices registered yet" }),
+        );
+    }
+    match svc.start_authentication(&passkeys) {
+        Ok((challenge_id, options)) => json_response(&json!({
+            "challengeId": challenge_id,
+            "options": options,
+        })),
+        Err(e) => json_status(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            json!({ "error": format!("{}", e) }),
+        ),
+    }
+}
+
+async fn auth_login_finish(
+    State(state): State<SharedState>,
+    Json(body): Json<LoginFinishBody>,
+) -> Response {
+    let Some(svc) = state.passkey.get() else {
+        return json_status(
+            StatusCode::SERVICE_UNAVAILABLE,
+            json!({ "error": "passkey unavailable on this transport" }),
+        );
+    };
+    let cred: webauthn_rs::prelude::PublicKeyCredential =
+        match serde_json::from_value(body.credential) {
+            Ok(c) => c,
+            Err(e) => {
+                return json_status(
+                    StatusCode::BAD_REQUEST,
+                    json!({ "error": format!("bad credential: {}", e) }),
+                );
+            }
+        };
+    let result = match svc.finish_authentication(&body.challenge_id, &cred) {
+        Ok(r) => r,
+        Err(e) => {
+            return json_status(
+                StatusCode::UNAUTHORIZED,
+                json!({ "error": format!("{}", e) }),
+            );
+        }
+    };
+    let cred_id = result.cred_id().as_ref().to_vec();
+    let stored = match state.device_store.passkey_for_credential(&cred_id) {
+        Some(s) => s,
+        None => {
+            return json_status(
+                StatusCode::UNAUTHORIZED,
+                json!({ "error": "credential not registered" }),
+            );
+        }
+    };
+    let mut updated = stored.passkey.clone();
+    updated.update_credential(&result);
+    let _ = state
+        .device_store
+        .update_passkey(stored.device_id, &updated);
+    let sid = match state
+        .device_store
+        .create_session(stored.device_id, SESSION_TTL)
+    {
+        Ok(s) => s,
+        Err(e) => {
+            return json_status(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                json!({ "error": format!("session: {}", e) }),
+            );
+        }
+    };
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::SET_COOKIE, build_session_cookie(&sid, SESSION_TTL.as_secs()))
+        .body(Body::from(
+            json!({ "deviceId": stored.device_id }).to_string(),
+        ))
+        .unwrap()
+}
+
+async fn auth_logout(State(state): State<SharedState>, headers: HeaderMap) -> Response {
+    let cookie = headers.get(header::COOKIE).and_then(|v| v.to_str().ok());
+    if let Some(sid) = crate::auth::read_cookie(cookie, SESSION_COOKIE) {
+        state.device_store.revoke_session(&sid);
+    }
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::SET_COOKIE, build_session_clear_cookie())
+        .body(Body::from(json!({ "ok": true }).to_string()))
+        .unwrap()
+}
+
+async fn auth_status(State(state): State<SharedState>, headers: HeaderMap) -> Response {
+    let cookie = headers.get(header::COOKIE).and_then(|v| v.to_str().ok());
+    let authenticated = state.request_authenticated(None, cookie);
+    let passkey_available = state.passkey.get().is_some();
+    let device_count = state.device_store.list_devices().len();
+    json_response(&json!({
+        "authenticated": authenticated,
+        "authRequired": state.auth_required,
+        "passkeyAvailable": passkey_available,
+        "deviceCount": device_count,
+    }))
+}
+
+async fn list_devices(State(state): State<SharedState>, headers: HeaderMap) -> Response {
+    let cookie = headers.get(header::COOKIE).and_then(|v| v.to_str().ok());
+    if !state.request_authenticated(None, cookie) {
+        return json_status(StatusCode::UNAUTHORIZED, json!({ "error": "unauthorized" }));
+    }
+    let devices = state.device_store.list_devices();
+    json_response(&json!({ "devices": devices }))
+}
+
+async fn delete_device(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+    Path(id): Path<i64>,
+) -> Response {
+    let cookie = headers.get(header::COOKIE).and_then(|v| v.to_str().ok());
+    if !state.request_authenticated(None, cookie) {
+        return json_status(StatusCode::UNAUTHORIZED, json!({ "error": "unauthorized" }));
+    }
+    match state.device_store.delete_device(id) {
+        Ok(n) if n > 0 => json_response(&json!({ "ok": true })),
+        Ok(_) => json_status(StatusCode::NOT_FOUND, json!({ "error": "not found" })),
+        Err(e) => json_status(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            json!({ "error": format!("{}", e) }),
+        ),
+    }
+}

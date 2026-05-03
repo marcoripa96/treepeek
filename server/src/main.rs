@@ -1,11 +1,13 @@
 mod assets;
 mod auth;
+mod device_store;
 mod diff;
 mod file;
 mod git;
 mod history;
 mod network;
 mod outline;
+mod passkey;
 mod push;
 mod registry;
 mod search;
@@ -24,8 +26,10 @@ use tokio::signal::unix::{signal, SignalKind};
 
 use crate::assets::build_manifest;
 use crate::auth::load_or_create_token;
+use crate::device_store::DeviceStore;
 use crate::history::HistoryStore;
 use crate::network::{lan_ipv4, tailscale_ipv4};
+use crate::passkey::PasskeyService;
 use crate::push::{ensure_vapid, PushManager};
 use crate::registry::{register_instance, unregister_instance, InstanceInfo};
 use crate::search::SearchService;
@@ -43,6 +47,7 @@ struct CliOptions {
     no_qr: bool,
     tunnel: bool,
     funnel: bool,
+    require_auth: bool,
     help: bool,
 }
 
@@ -78,6 +83,7 @@ fn parse_args(argv: &[String]) -> CliOptions {
             "--no-qr" => opts.no_qr = true,
             "--tunnel" | "-t" => opts.tunnel = true,
             "--funnel" | "-f" => opts.funnel = true,
+            "--require-auth" => opts.require_auth = true,
             other if other.starts_with('-') => {
                 eprintln!("treepeek: unknown flag {}", other);
             }
@@ -106,6 +112,8 @@ Options:
                        (random *.trycloudflare.com per run; binds to 127.0.0.1)
   -f, --funnel         Stable public HTTPS URL via Tailscale Funnel
                        (https://<host>.<tailnet>.ts.net; binds to 127.0.0.1)
+      --require-auth   Require token/passkey even in Tailscale-only mode
+                       (default: trust the tailnet when bound to tailscale0)
   -h, --help           Show this help"
     );
 }
@@ -189,6 +197,11 @@ async fn run(opts: CliOptions) -> Result<(), String> {
         HistoryStore::open(&root, &history_db_path(&root))
             .map_err(|e| format!("history db: {}", e))?,
     );
+    let device_store = Arc::new(
+        DeviceStore::open(&device_db_path(&root))
+            .map_err(|e| format!("device db: {}", e))?,
+    );
+    device_store.cleanup_expired();
 
     let mut vapid_public_key: Option<String> = None;
     let push_manager = match PushManager::new(root_str.clone()) {
@@ -224,14 +237,17 @@ async fn run(opts: CliOptions) -> Result<(), String> {
         }
     };
 
+    let auth_required = opts.require_auth || bind_reason != "tailscale0";
     let state = AppState::new(
         root.clone(),
         root_name.clone(),
         display_root.clone(),
         opts.all,
         token.clone(),
+        auth_required,
         manifest_json,
         history_store.clone(),
+        device_store.clone(),
         push_manager.clone(),
         vapid_public_key.clone(),
         search.clone(),
@@ -412,6 +428,17 @@ async fn run(opts: CliOptions) -> Result<(), String> {
         println!("  bind:     {}:{}  ({})", bind, bound_port, bind_reason);
     }
 
+    if let Some(t) = tunnel_handle.as_ref() {
+        match init_passkey_service(&t.url) {
+            Ok(svc) => {
+                let _ = state.passkey.set(Arc::new(svc));
+            }
+            Err(e) => {
+                eprintln!("[treepeek] passkey unavailable: {}", e);
+            }
+        }
+    }
+
     println!();
     println!("  open on your phone:");
     println!("    \x1b[36m{}\x1b[0m", share_url);
@@ -464,6 +491,21 @@ fn history_db_path(root: &std::path::Path) -> PathBuf {
     per_root_cache_dir(root)
         .map(|d| d.join("history.sqlite"))
         .unwrap_or_else(|| PathBuf::from("/tmp/treepeek-history.sqlite"))
+}
+
+fn device_db_path(root: &std::path::Path) -> PathBuf {
+    per_root_cache_dir(root)
+        .map(|d| d.join("devices.sqlite"))
+        .unwrap_or_else(|| PathBuf::from("/tmp/treepeek-devices.sqlite"))
+}
+
+fn init_passkey_service(origin_url: &str) -> Result<PasskeyService, String> {
+    let parsed = url::Url::parse(origin_url).map_err(|e| format!("bad origin url: {}", e))?;
+    let rp_id = parsed
+        .host_str()
+        .ok_or_else(|| "origin url missing host".to_string())?
+        .to_string();
+    PasskeyService::new(&rp_id, &parsed).map_err(|e| format!("webauthn init: {}", e))
 }
 
 fn relative_changed(root: &std::path::Path, paths: &[String]) -> Vec<String> {

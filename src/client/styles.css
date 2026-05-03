@@ -1346,3 +1346,157 @@ body {
   width: 100%;
   font-size: 15px;
 }
+
+.auth-gate {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: #0b0d10;
+  color: #e5e7eb;
+  padding: 24px;
+}
+
+.auth-gate-card {
+  max-width: 360px;
+  text-align: center;
+}
+
+.auth-gate-card h1 {
+  font-size: 17px;
+  margin: 0 0 8px;
+  color: #f3f4f6;
+}
+
+.auth-gate-card p {
+  font-size: 14px;
+  color: #94a3b8;
+  margin: 0 0 16px;
+  line-height: 1.45;
+}
+
+.auth-gate-card code {
+  background: rgba(255, 255, 255, 0.08);
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 12px;
+}
+
+.auth-gate-button {
+  background: #2563eb;
+  color: white;
+  border: 0;
+  padding: 10px 18px;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.auth-gate-button:active {
+  background: #1d4ed8;
+}
+
+.auth-gate-spinner {
+  width: 28px;
+  height: 28px;
+  margin: 0 auto 14px;
+  border: 2px solid rgba(255, 255, 255, 0.18);
+  border-top-color: rgba(255, 255, 255, 0.7);
+  border-radius: 50%;
+  animation: auth-gate-spin 0.9s linear infinite;
+}
+
+@keyframes auth-gate-spin {
+  to { transform: rotate(360deg); }
+}
+
+.settings-row-block {
+  display: block;
+}
+
+.settings-row-block .settings-label {
+  display: block;
+  margin-bottom: 8px;
+}
+
+.device-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.device-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  background: rgba(0, 0, 0, 0.04);
+  border-radius: 8px;
+}
+
+.device-meta {
+  min-width: 0;
+}
+
+.device-name {
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.device-time {
+  font-size: 12px;
+  color: #6b7280;
+  margin-top: 2px;
+}
+
+.device-revoke {
+  background: transparent;
+  color: #b91c1c;
+  border: 0;
+  padding: 6px 10px;
+  font-size: 13px;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.device-revoke:disabled {
+  opacity: 0.5;
+}
+
+.device-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.device-action-primary,
+.device-action-secondary {
+  border: 0;
+  border-radius: 8px;
+  padding: 10px 14px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.device-action-primary {
+  background: #2563eb;
+  color: white;
+}
+
+.device-action-primary:disabled {
+  opacity: 0.6;
+}
+
+.device-action-secondary {
+  background: rgba(0, 0, 0, 0.06);
+  color: inherit;
+}
+
+.device-action-secondary:disabled {
+  opacity: 0.5;
+}
