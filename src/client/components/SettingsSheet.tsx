@@ -54,6 +54,21 @@ export function SettingsSheet({
     onClose();
   };
 
+  const handleReload = async () => {
+    hapticSelection();
+    // Drop every service-worker cache before reloading so the next request
+    // for the HTML / JS / CSS hits the server, not whatever the SW had
+    // stored. Without this an installed PWA can pin a stale shell until
+    // the SW's own staleWhileRevalidate rotates it.
+    try {
+      if ("caches" in window) {
+        const keys = await caches.keys();
+        await Promise.all(keys.map((k) => caches.delete(k)));
+      }
+    } catch {}
+    location.reload();
+  };
+
   const notificationsUnsupported = !pushSupported();
   const notificationsBlocked =
     !notificationsUnsupported &&
@@ -141,6 +156,21 @@ export function SettingsSheet({
           </div>
 
           <DevicesSection open={open} />
+
+          <div className="settings-row settings-row-block">
+            <span className="settings-label">Reload app</span>
+            <p className="settings-hint">
+              Clear cached assets and reload — use this when an update isn't
+              showing up.
+            </p>
+            <button
+              type="button"
+              className="device-action-secondary"
+              onClick={() => void handleReload()}
+            >
+              Reload app
+            </button>
+          </div>
         </div>
       </aside>
     </>

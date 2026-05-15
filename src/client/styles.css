@@ -57,11 +57,12 @@ textarea:focus-visible {
 }
 
 html, body {
-  position: fixed;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  overflow: hidden;
+  /* Just `height: 100vh` — nothing else. Adding `position: fixed; inset: 0`
+     or `overflow: hidden` to the document element reserves a safe-area zone
+     on iOS PWA black-translucent and leaves a visible strip above the home
+     indicator. The actual scroll-blocking is done by descendants (the
+     `.directory-shell` and its children all sit at `position: fixed`). */
+  height: 100vh;
 }
 
 body {
@@ -71,7 +72,7 @@ body {
 #root {
   position: relative;
   width: 100%;
-  height: 100%;
+  height: 100vh;
   overflow: hidden;
   background:
     radial-gradient(circle at 24px 16px, rgba(255, 255, 255, 0.9), rgba(255, 255, 255, 0) 34%),
@@ -85,18 +86,25 @@ body {
 }
 .directory-shell {
   --directory-panel-width: min(82vw, 340px);
-  position: relative;
+  --directory-radius: 30px;
+  position: fixed;
+  top: 0;
+  left: 0;
   width: 100%;
-  height: 100%;
+  /* Explicit 100vh on every container in the chain (html/body/#root/shell)
+     is what reliably reaches the device bottom on iOS PWA black-translucent
+     — `inset: 0` alone clips to the safe-area viewport, leaving a strip. */
+  height: 100vh;
   overflow: hidden;
 }
 .directory-panel {
   position: absolute;
-  inset: 0 auto 0 0;
+  top: 0;
+  left: 0;
   width: var(--directory-panel-width);
+  height: 100vh;
   padding: calc(var(--safe-top) + 22px) 12px calc(var(--safe-bottom) + 18px);
   background: var(--glass-bg);
-  border-right: 1px solid var(--border);
   display: flex;
   flex-direction: column;
   gap: 18px;
@@ -118,6 +126,24 @@ body {
   overflow: auto;
   -webkit-overflow-scrolling: touch;
   overscroll-behavior: contain;
+  /* `pan-y` lets the list scroll vertically while keeping horizontal pointer
+     events on the JS side — without this, an open-drawer swipe started over
+     the list cancels because iOS' composited scroll layer claims the gesture
+     before our 6px commit threshold fires. */
+  touch-action: pan-y;
+}
+
+/* Same reasoning for every vertically-scrolling region on the page-shell —
+   tree view, search/history/folder lists, outline panel, pulse markdown.
+   `.folder-breadcrumb` intentionally keeps default `auto` because it
+   scrolls horizontally and must own that axis. */
+#tree,
+#search-list,
+#history-list,
+#folder-list,
+.outline-panel,
+.pulse-md {
+  touch-action: pan-y;
 }
 .directory-panel-item {
   width: 100%;
@@ -184,20 +210,55 @@ body {
   background: var(--selected);
   transform: scale(0.98);
 }
+/* Registered custom property so it can be animated by the same CSS transition
+   that handles `transform`. Drives shadow + corner radius from a single
+   0..1 value, updated either by the gesture (inline, per-frame) or by the
+   `[data-directories-open]` rule below for tap-driven toggles. */
+@property --drawer-progress {
+  syntax: "<number>";
+  inherits: false;
+  initial-value: 0;
+}
+
 .directory-main {
   position: fixed;
-  inset: 0;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100vh;
   z-index: 2;
   overflow: hidden;
   background:
     radial-gradient(circle at 24px 16px, rgba(255, 255, 255, 0.9), rgba(255, 255, 255, 0) 34%),
     linear-gradient(180deg, #ffffff 0%, var(--bg) 56%, #f1eee8 100%);
   transform: translate3d(0, 0, 0);
-  transition: transform 260ms cubic-bezier(0.32, 0.72, 0, 1), box-shadow 260ms ease;
+  /* `pan-y` reserves vertical scrolling for the browser and hands every
+     horizontal pointer move to JS from the very first frame. Once the
+     gesture commits the JS handler flips this to `none` for the duration
+     of the drag so a diagonal drift can't lose us the touch. */
+  touch-action: pan-y;
+  /* Shadow + radius are functions of --drawer-progress (0..1). At rest
+     they evaluate to zero, so the page-shell is square and flat when the
+     drawer is closed — but during the swipe the variable updates 1:1 with
+     the drag, so the rounded edge and drop shadow are visible the moment
+     you start moving, not only after the snap commits. */
+  --drawer-progress: 0;
+  border-top-left-radius: calc(var(--directory-radius) * var(--drawer-progress));
+  border-bottom-left-radius: calc(var(--directory-radius) * var(--drawer-progress));
+  box-shadow:
+    -12px 0 28px rgba(0, 0, 0, calc(0.14 * var(--drawer-progress))),
+    -2px 0 6px rgba(0, 0, 0, calc(0.06 * var(--drawer-progress)));
+  /* 240ms cubic-bezier(0.32, 0.72, 0, 1) is the iOS-style release timing
+     used in reco-ai — quick start, eased out, no perceived bounce. The
+     gesture handler kills the transition during the drag itself, so this
+     only applies to tap-toggle and gesture-release snaps. */
+  transition:
+    transform 240ms cubic-bezier(0.32, 0.72, 0, 1),
+    --drawer-progress 240ms cubic-bezier(0.32, 0.72, 0, 1);
 }
 .directory-shell[data-directories-open="true"] .directory-main {
   transform: translate3d(var(--directory-panel-width), 0, 0);
-  box-shadow: -16px 0 46px rgba(37, 31, 24, 0.13);
+  --drawer-progress: 1;
 }
 .directory-main::after {
   content: "";
@@ -211,8 +272,14 @@ body {
   pointer-events: none;
 }
 .directory-scrim {
-  position: absolute;
-  inset: 0;
+  /* Invisible scrim. Only here to capture tap-to-close and the drag-to-close
+     gesture once the drawer is open — the shadow + corner radius on
+     .directory-main already communicate "this layer is muted." */
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100vh;
   z-index: 50;
   background: transparent;
   pointer-events: none;

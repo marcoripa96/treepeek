@@ -74,7 +74,7 @@ export function withWs(path: string, ws: number | null): string {
 
 export async function fetchTree(ws: number | null): Promise<TreeResponse | null> {
   try {
-    const res = await fetch(withWs("/api/tree", ws), { cache: "no-store" });
+    const res = await fetch(withWs("api/tree", ws), { cache: "no-store" });
     if (!res.ok) return null;
     return (await res.json()) as TreeResponse;
   } catch {
@@ -84,7 +84,7 @@ export async function fetchTree(ws: number | null): Promise<TreeResponse | null>
 
 export async function fetchInstances(): Promise<InstancesPayload | null> {
   try {
-    const res = await fetch("/api/instances", { cache: "no-store" });
+    const res = await fetch("api/instances", { cache: "no-store" });
     if (!res.ok) return null;
     return (await res.json()) as InstancesPayload;
   } catch {
@@ -94,7 +94,7 @@ export async function fetchInstances(): Promise<InstancesPayload | null> {
 
 export async function fetchHistory(ws: number | null): Promise<HistoryResponse | null> {
   try {
-    const res = await fetch(withWs("/api/history", ws), { cache: "no-store" });
+    const res = await fetch(withWs("api/history", ws), { cache: "no-store" });
     if (!res.ok) return null;
     return (await res.json()) as HistoryResponse;
   } catch {
@@ -107,7 +107,7 @@ export async function fetchFile(
   ws: number | null,
   signal?: AbortSignal
 ): Promise<FileResponse> {
-  const res = await fetch(withWs(`/api/file?p=${encodeURIComponent(path)}`, ws), {
+  const res = await fetch(withWs(`api/file?p=${encodeURIComponent(path)}`, ws), {
     signal,
   });
   if (!res.ok) throw new Error(`Error ${res.status}`);
@@ -131,7 +131,7 @@ export async function fetchSearch(
   signal?: AbortSignal
 ): Promise<SearchHit[]> {
   const url = withWs(
-    `/api/search?q=${encodeURIComponent(query)}&limit=${limit}`,
+    `api/search?q=${encodeURIComponent(query)}&limit=${limit}`,
     ws
   );
   try {
@@ -168,7 +168,7 @@ export async function fetchOutline(
 ): Promise<OutlineResponse | null> {
   try {
     const res = await fetch(
-      withWs(`/api/outline?p=${encodeURIComponent(path)}`, ws),
+      withWs(`api/outline?p=${encodeURIComponent(path)}`, ws),
       { cache: "no-store", signal }
     );
     if (!res.ok) return null;
@@ -200,7 +200,7 @@ export interface PulseResponse {
 
 export async function fetchPulse(ws: number | null): Promise<PulseResponse | null> {
   try {
-    const res = await fetch(withWs("/api/pulse", ws), { cache: "no-store" });
+    const res = await fetch(withWs("api/pulse", ws), { cache: "no-store" });
     if (!res.ok) return null;
     return (await res.json()) as PulseResponse;
   } catch {
@@ -220,7 +220,7 @@ export async function fetchDiff(
   ws: number | null,
   signal?: AbortSignal
 ): Promise<DiffResponse> {
-  const res = await fetch(withWs(`/api/diff?p=${encodeURIComponent(path)}`, ws), {
+  const res = await fetch(withWs(`api/diff?p=${encodeURIComponent(path)}`, ws), {
     signal,
   });
   if (!res.ok) throw new Error(`Error ${res.status}`);

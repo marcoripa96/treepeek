@@ -47,7 +47,10 @@ const clientResult = await Bun.build({
   splitting: true,
   minify: true,
   sourcemap: "none",
-  publicPath: "/",
+  // Relative publicPath so dynamic-import chunks resolve against the current
+  // document URL — required for funnel mode where the app is mounted at a
+  // /<dir>/ prefix instead of site root.
+  publicPath: "./",
   naming: {
     entry: "client.[ext]",
     chunk: "chunk-[hash].[ext]",

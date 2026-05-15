@@ -159,7 +159,7 @@ export interface AuthStatus {
 
 export async function fetchAuthStatus(): Promise<AuthStatus | null> {
   try {
-    const r = await fetch("/api/auth/status", { cache: "no-store" });
+    const r = await fetch("api/auth/status", { cache: "no-store" });
     if (!r.ok) return null;
     return (await r.json()) as AuthStatus;
   } catch {
@@ -175,14 +175,14 @@ export interface DeviceRow {
 }
 
 export async function listDevices(): Promise<DeviceRow[]> {
-  const r = await fetch("/api/devices", { cache: "no-store" });
+  const r = await fetch("api/devices", { cache: "no-store" });
   if (!r.ok) return [];
   const j = (await r.json()) as { devices: DeviceRow[] };
   return j.devices ?? [];
 }
 
 export async function deleteDevice(id: number): Promise<boolean> {
-  const r = await fetch(`/api/devices/${id}`, { method: "DELETE" });
+  const r = await fetch(`api/devices/${id}`, { method: "DELETE" });
   return r.ok;
 }
 
@@ -198,7 +198,7 @@ export async function registerPasskey(
   if (!isWebAuthnAvailable()) throw new Error("WebAuthn not available");
   const { name, pairingToken } = options ?? {};
   const qs = pairingToken ? `?k=${encodeURIComponent(pairingToken)}` : "";
-  const startRes = await fetch(`/api/auth/register/start${qs}`, {
+  const startRes = await fetch(`api/auth/register/start${qs}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ name: name ?? null }),
@@ -214,7 +214,7 @@ export async function registerPasskey(
   const opts = decodeCreationOptions(startJson.options);
   const cred = (await navigator.credentials.create(opts)) as PublicKeyCredential | null;
   if (!cred) throw new Error("registration cancelled");
-  const finishRes = await fetch(`/api/auth/register/finish${qs}`, {
+  const finishRes = await fetch(`api/auth/register/finish${qs}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -232,7 +232,7 @@ export async function registerPasskey(
 
 export async function loginWithPasskey(): Promise<{ deviceId: number } | null> {
   if (!isWebAuthnAvailable()) return null;
-  const startRes = await fetch("/api/auth/login/start", { method: "POST" });
+  const startRes = await fetch("api/auth/login/start", { method: "POST" });
   if (startRes.status === 412) return null; // no devices registered
   if (!startRes.ok) return null;
   const startJson = (await startRes.json()) as {
@@ -242,7 +242,7 @@ export async function loginWithPasskey(): Promise<{ deviceId: number } | null> {
   const opts = decodeRequestOptions(startJson.options);
   const cred = (await navigator.credentials.get(opts)) as PublicKeyCredential | null;
   if (!cred) return null;
-  const finishRes = await fetch("/api/auth/login/finish", {
+  const finishRes = await fetch("api/auth/login/finish", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -255,7 +255,7 @@ export async function loginWithPasskey(): Promise<{ deviceId: number } | null> {
 }
 
 export async function logout(): Promise<void> {
-  await fetch("/api/auth/logout", { method: "POST" });
+  await fetch("api/auth/logout", { method: "POST" });
 }
 
 async function safeJson(res: Response): Promise<{ error?: string } | null> {

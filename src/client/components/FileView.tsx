@@ -378,7 +378,11 @@ export function FileView({
   };
 
   const onShare = async () => {
-    const url = new URL(location.origin);
+    // baseURI carries the funnel mount prefix when present; falling back to
+    // location.origin alone would strip it and produce an unreachable link.
+    const url = new URL(document.baseURI);
+    url.search = "";
+    url.hash = "";
     url.searchParams.set("file", path);
     url.hash = formatLineHash(lineRange);
     const shareUrl = url.toString();

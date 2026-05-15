@@ -14,6 +14,11 @@ pub struct InstanceInfo {
     pub pid: u32,
     #[serde(rename = "startedAt")]
     pub started_at: i64,
+    /// Empty for site-root instances; otherwise leading-slash prefix like
+    /// "/treepeek" that funnel mode mounts the app under. Required so the
+    /// cross-instance WS proxy can target the peer's actual route.
+    #[serde(rename = "basePath", default)]
+    pub base_path: String,
 }
 
 fn dir() -> PathBuf {

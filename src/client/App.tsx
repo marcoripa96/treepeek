@@ -175,9 +175,12 @@ export function App() {
     const connect = () => {
       if (stopped) return;
       setLiveStatus("connecting");
-      const proto = location.protocol === "https:" ? "wss:" : "ws:";
-      const path = "/ws" + (currentWs == null ? "" : `?ws=${currentWs}`);
-      const url = `${proto}//${location.host}${path}`;
+      // Resolve "ws" against document.baseURI so the connection lands inside
+      // the funnel-mount prefix when one is in effect.
+      const wsUrl = new URL("ws", document.baseURI);
+      wsUrl.protocol = location.protocol === "https:" ? "wss:" : "ws:";
+      if (currentWs != null) wsUrl.searchParams.set("ws", String(currentWs));
+      const url = wsUrl.toString();
       try {
         ws = new WebSocket(url);
       } catch {
@@ -252,7 +255,7 @@ export function App() {
     };
     navigator.serviceWorker.addEventListener("message", onMessage);
     navigator.serviceWorker
-      .register("/sw.js")
+      .register("sw.js")
       .then((reg) => {
         reg.update().catch(() => {});
       })
@@ -297,27 +300,60 @@ export function App() {
     setThemeColor(target, 240);
   }, [selectedFile, settingsOpen, directoriesOpen]);
 
-  // Native-feel edge swipe: drag from the left to open the directory drawer,
-  // drag right-to-left over the scrim to close it. Bypassed while another
-  // sheet is foregrounded, since those own the gesture surface.
+  // Native-feel drawer swipe. Listens at the document level so a horizontal
+  // drag started anywhere on the page can open or close the drawer — not just
+  // a thin edge strip. The strict direction filter (vertical drops the
+  // gesture) keeps page scrolling untouched, and we only capture the pointer
+  // once a horizontal motion has committed so taps/clicks fall through.
+  // Bypassed while another sheet is foregrounded since those own the gesture.
   useEffect(() => {
     const main = mainRef.current;
     if (!main) return;
     if (selectedFile !== null || settingsOpen) return;
-    const target = directoriesOpen ? scrimRef.current : edgeRef.current;
-    if (!target) return;
 
-    const COMMIT_PX = 8;
-    const FLICK_VELOCITY = 0.4; // px/ms
+    const COMMIT_PX = 6;
+    // Window over which release velocity is averaged. Wide enough to ride out
+    // the natural tail-off at the end of a flick, narrow enough that a tap
+    // doesn't read as motion.
+    const VELOCITY_WINDOW_MS = 80;
+    // WWDC18 "Designing Fluid Interfaces" projection horizon. Snap by where
+    // the finger would land if motion continued at the current velocity,
+    // unifying "drag past half" and "tiny fast flick" into a single rule.
+    const PROJECTION_MS = 700;
+    // UIScrollView rubber-band coefficient — the same formula used in
+    // _UIScrollViewRubberBandClampedValue. Past either endpoint the transform
+    // decelerates asymptotically toward a fraction of the dimension.
+    const RUBBER_COEFF = 0.55;
+    const rubberBand = (distance: number, dimension: number) => {
+      if (dimension <= 0) return 0;
+      return (1 - 1 / ((distance * RUBBER_COEFF) / dimension + 1)) * dimension;
+    };
+
     let panelWidth = 0;
     let startX = 0;
     let startY = 0;
     let lastX = 0;
-    let lastT = 0;
-    let velocity = 0;
+    let lastY = 0;
     let committed = false;
     let pointerId: number | null = null;
     let cleanupTransition: (() => void) | null = null;
+    // Rolling sample buffer for windowed velocity; single-frame velocity is
+    // too noisy at release for a small flick to read as intent reliably.
+    const samples: { x: number; t: number }[] = [];
+
+    const recordSample = (clientX: number, t: number) => {
+      samples.push({ x: clientX, t });
+      while (samples.length > 1 && samples[0]!.t < t - VELOCITY_WINDOW_MS) {
+        samples.shift();
+      }
+    };
+    const windowedVelocity = (): number => {
+      if (samples.length < 2) return 0;
+      const oldest = samples[0]!;
+      const newest = samples[samples.length - 1]!;
+      const dt = newest.t - oldest.t;
+      return dt > 0 ? (newest.x - oldest.x) / dt : 0;
+    };
 
     const settleTo = (snapOpen: boolean) => {
       cleanupTransition?.();
@@ -325,12 +361,24 @@ export function App() {
       const targetX = snapOpen ? panelWidth : 0;
       main.style.transition = "";
       main.style.transform = `translate3d(${targetX}px, 0, 0)`;
+      // Animate the progress variable to the snap target alongside the
+      // transform — same transition + curve picks it up. Without this, on
+      // release the radius/shadow would jump straight to the final value
+      // while the slide tweens.
+      main.style.setProperty("--drawer-progress", snapOpen ? "1" : "0");
       if (snapOpen !== directoriesOpen) {
         hapticSelection();
         setDirectoriesOpen(snapOpen);
       }
       const finish = () => {
+        // Hand control back to the CSS state-driven rules. Inline styles are
+        // cleared so a subsequent tap-toggle animates from the
+        // data-attribute-derived value instead of the stale inline one.
         main.style.transform = "";
+        main.style.removeProperty("--drawer-progress");
+        // Restore browser scrolling: we only need to block it during an
+        // active drag, never between gestures.
+        main.style.touchAction = "";
         main.removeEventListener("transitionend", onEnd);
         clearTimeout(fallback);
         cleanupTransition = null;
@@ -339,7 +387,7 @@ export function App() {
         if (e.propertyName === "transform") finish();
       };
       main.addEventListener("transitionend", onEnd);
-      const fallback = window.setTimeout(finish, 360);
+      const fallback = window.setTimeout(finish, 320);
       cleanupTransition = finish;
     };
 
@@ -349,18 +397,32 @@ export function App() {
       if (panelWidth <= 0) return;
       pointerId = e.pointerId;
       startX = lastX = e.clientX;
-      startY = e.clientY;
-      lastT = e.timeStamp;
-      velocity = 0;
+      startY = lastY = e.clientY;
       committed = false;
+      samples.length = 0;
+      samples.push({ x: e.clientX, t: e.timeStamp });
     };
 
     const onPointerMove = (e: PointerEvent) => {
       if (pointerId === null || e.pointerId !== pointerId) return;
       const dx = e.clientX - startX;
       const dy = e.clientY - startY;
+
+      // Sample on every move — including before commit — so the release
+      // velocity reflects the whole gesture, not just the last frame.
+      recordSample(e.clientX, e.timeStamp);
+      lastX = e.clientX;
+      lastY = e.clientY;
+
       if (!committed) {
-        if (Math.abs(dx) < COMMIT_PX && Math.abs(dy) < COMMIT_PX) return;
+        // Wait until horizontal motion clears the threshold. Vertical-only
+        // motion never commits the drawer — but we don't *drop* the gesture
+        // on a vertical wobble either, because the user might be aiming
+        // horizontal and we'd rather wait than reject prematurely.
+        if (Math.abs(dx) < COMMIT_PX) return;
+        // Decide direction at commit time. If vertical clearly dominates
+        // the horizontal threshold-crossing motion, this is a scroll
+        // attempt — hand the gesture back to the browser.
         if (Math.abs(dy) > Math.abs(dx)) {
           pointerId = null;
           return;
@@ -374,42 +436,68 @@ export function App() {
           return;
         }
         committed = true;
+        // Capture the pointer so subsequent moves keep firing to JS even if
+        // iOS Safari would otherwise reclaim the gesture for a native pan or
+        // back-swipe — without this, a slightly diagonal drag reads as
+        // "cancelled" mid-flick. We capture on the document's body since the
+        // listeners live at document level.
         try {
-          target.setPointerCapture(e.pointerId);
+          (e.target as Element | null)?.setPointerCapture?.(e.pointerId);
         } catch {}
         cleanupTransition?.();
         cleanupTransition = null;
         main.style.transition = "none";
+        // Lock out browser scrolling for the duration of the gesture. Even
+        // with `touch-action: pan-y` set, a diagonal drift mid-drag can let
+        // the browser claim the touch for vertical scroll and cancel ours;
+        // forcing `none` once we own the gesture prevents that race.
+        main.style.touchAction = "none";
       }
+
       const baseX = directoriesOpen ? panelWidth : 0;
-      let nextX = baseX + dx;
-      if (nextX < 0) nextX = 0;
-      if (nextX > panelWidth) nextX = panelWidth;
-      main.style.transform = `translate3d(${nextX}px, 0, 0)`;
-      const dt = e.timeStamp - lastT;
-      if (dt > 0) {
-        velocity = (e.clientX - lastX) / dt;
-        lastX = e.clientX;
-        lastT = e.timeStamp;
+      const raw = baseX + dx;
+      // Rubber-band when the drag pulls past either endpoint instead of
+      // hard-clamping. Past 0 we resist by (raw < 0)'s magnitude, past
+      // width by (raw - width)'s magnitude.
+      let nextX: number;
+      if (raw < 0) {
+        nextX = -rubberBand(-raw, panelWidth);
+      } else if (raw > panelWidth) {
+        nextX = panelWidth + rubberBand(raw - panelWidth, panelWidth);
+      } else {
+        nextX = raw;
       }
-      e.preventDefault();
+      main.style.transform = `translate3d(${nextX}px, 0, 0)`;
+      // Drive --drawer-progress in lockstep with the transform so the corner
+      // radius and drop shadow are visible from the very first pixel of the
+      // drag — without this they'd only appear after the snap commits.
+      // Clamped to [0, 1] so the rubber-band over-pull doesn't over-shade.
+      const progress = Math.max(0, Math.min(1, nextX / panelWidth));
+      main.style.setProperty("--drawer-progress", String(progress));
+
+      if (e.cancelable) e.preventDefault();
     };
 
     const onPointerEnd = (e: PointerEvent) => {
       if (pointerId === null || e.pointerId !== pointerId) return;
-      if (!committed) {
+      const dx = lastX - startX;
+      const dy = lastY - startY;
+      // Sub-threshold gestures that are vertical (scroll) or motionless
+      // (tap) shouldn't decide anything. Committed drags already passed
+      // the direction filter in onPointerMove.
+      if (!committed && Math.abs(dx) <= Math.abs(dy)) {
         pointerId = null;
         return;
       }
+      const v = windowedVelocity();
       const baseX = directoriesOpen ? panelWidth : 0;
-      const currentX = Math.max(
-        0,
-        Math.min(panelWidth, baseX + (lastX - startX))
-      );
-      let snapOpen: boolean;
-      if (Math.abs(velocity) > FLICK_VELOCITY) snapOpen = velocity > 0;
-      else snapOpen = currentX > panelWidth * 0.5;
-      settleTo(snapOpen);
+      const currentX = committed
+        ? Math.max(0, Math.min(panelWidth, baseX + dx))
+        : baseX;
+      // Project where the drag would land if motion continued at the
+      // current velocity. Snap to whichever side that lands on.
+      const projected = currentX + v * PROJECTION_MS;
+      settleTo(projected > panelWidth / 2);
       pointerId = null;
       committed = false;
     };
@@ -421,16 +509,16 @@ export function App() {
       committed = false;
     };
 
-    target.addEventListener("pointerdown", onPointerDown);
-    target.addEventListener("pointermove", onPointerMove);
-    target.addEventListener("pointerup", onPointerEnd);
-    target.addEventListener("pointercancel", onPointerCancel);
+    document.addEventListener("pointerdown", onPointerDown);
+    document.addEventListener("pointermove", onPointerMove, { passive: false });
+    document.addEventListener("pointerup", onPointerEnd);
+    document.addEventListener("pointercancel", onPointerCancel);
 
     return () => {
-      target.removeEventListener("pointerdown", onPointerDown);
-      target.removeEventListener("pointermove", onPointerMove);
-      target.removeEventListener("pointerup", onPointerEnd);
-      target.removeEventListener("pointercancel", onPointerCancel);
+      document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("pointermove", onPointerMove);
+      document.removeEventListener("pointerup", onPointerEnd);
+      document.removeEventListener("pointercancel", onPointerCancel);
     };
   }, [directoriesOpen, selectedFile, settingsOpen]);
 

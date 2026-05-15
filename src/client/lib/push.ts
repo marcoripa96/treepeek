@@ -38,7 +38,7 @@ export async function isPushSubscribed(): Promise<boolean> {
 
 async function fetchVapidKey(): Promise<string | null> {
   try {
-    const res = await fetch("/api/push/key", { cache: "no-store" });
+    const res = await fetch("api/push/key", { cache: "no-store" });
     if (!res.ok) return null;
     const data = (await res.json()) as { publicKey?: string };
     return typeof data.publicKey === "string" ? data.publicKey : null;
@@ -65,7 +65,7 @@ export async function subscribePush(): Promise<boolean> {
     }
   }
   try {
-    const res = await fetch("/api/push/subscribe", {
+    const res = await fetch("api/push/subscribe", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(sub.toJSON()),
@@ -88,7 +88,7 @@ export async function unsubscribePush(): Promise<void> {
   }
   if (!sub) return;
   try {
-    await fetch("/api/push/unsubscribe", {
+    await fetch("api/push/unsubscribe", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ endpoint: sub.endpoint }),

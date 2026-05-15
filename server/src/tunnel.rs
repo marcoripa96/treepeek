@@ -5,11 +5,13 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
 
 const READY_TIMEOUT_MS: u64 = 60_000;
+const FUNNEL_PUBLIC_PORT: u16 = 443;
 
 pub struct TunnelHandle {
     pub url: String,
     pub kind: TunnelKind,
     proc: Option<Child>,
+    funnel_path: Option<String>,
 }
 
 #[derive(Clone, Copy)]
@@ -25,8 +27,20 @@ impl TunnelHandle {
             let _ = tokio::time::timeout(Duration::from_secs(2), proc.wait()).await;
         }
         if matches!(self.kind, TunnelKind::TailscaleFunnel) {
+            // Only remove our own path mapping so other treepeek instances (or
+            // unrelated funnels) on this device stay intact.
+            let mut args: Vec<String> = vec![
+                "funnel".into(),
+                format!("--https={}", FUNNEL_PUBLIC_PORT),
+            ];
+            if let Some(p) = self.funnel_path.as_deref() {
+                if !p.is_empty() {
+                    args.push(format!("--set-path={}", p));
+                }
+            }
+            args.push("off".into());
             let _ = Command::new("tailscale")
-                .args(["funnel", "reset"])
+                .args(&args)
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
                 .status()
@@ -112,6 +126,7 @@ pub async fn start_cloudflared_quick_tunnel(local_url: &str) -> Result<TunnelHan
         url,
         kind: TunnelKind::Cloudflared,
         proc: Some(child),
+        funnel_path: None,
     })
 }
 
@@ -133,13 +148,47 @@ fn extract_trycloudflare(s: &str) -> Option<String> {
     None
 }
 
-pub async fn start_tailscale_funnel(port: u16) -> Result<TunnelHandle, String> {
+/// Starts a tailscale funnel mapping at the chosen base path, on the fixed
+/// public port 443. `base_path` is the leading-slash prefix (e.g. "/treepeek")
+/// or empty to mount at site root. Returns an error early if the same prefix
+/// is already funneled on this device.
+pub async fn start_tailscale_funnel(
+    port: u16,
+    base_path: &str,
+) -> Result<TunnelHandle, String> {
     let hostname = match get_tailscale_hostname().await {
         Ok(h) => h,
         Err(e) => return Err(format!("Tailscale not available: {}", e)),
     };
+
+    if !base_path.is_empty() {
+        if let Some(existing) = funnel_path_in_use(FUNNEL_PUBLIC_PORT, base_path).await {
+            return Err(format!(
+                "tailscale funnel path {} already in use on this node (currently proxying {}); pick a different directory name or `tailscale funnel --https={} --set-path={} off`",
+                base_path, existing, FUNNEL_PUBLIC_PORT, base_path
+            ));
+        }
+    }
+
+    let target = if base_path.is_empty() {
+        format!("http://localhost:{}", port)
+    } else {
+        // Pass the path through to the local service so the server sees the
+        // prefix and the SPA's relative URLs resolve under it.
+        format!("http://localhost:{}{}", port, base_path)
+    };
+    let mut args: Vec<String> = vec![
+        "funnel".into(),
+        "--bg".into(),
+        format!("--https={}", FUNNEL_PUBLIC_PORT),
+    ];
+    if !base_path.is_empty() {
+        args.push(format!("--set-path={}", base_path));
+    }
+    args.push(target);
+
     let out = Command::new("tailscale")
-        .args(["funnel", "--bg", &port.to_string()])
+        .args(&args)
         .output()
         .await
         .map_err(|e| format!("spawn tailscale: {}", e))?;
@@ -150,11 +199,47 @@ pub async fn start_tailscale_funnel(port: u16) -> Result<TunnelHandle, String> {
         let msg = if msg.is_empty() { stdout.trim().to_string() } else { msg };
         return Err(if msg.is_empty() { "tailscale funnel failed".into() } else { msg });
     }
+    let public_url = if FUNNEL_PUBLIC_PORT == 443 {
+        format!("https://{}{}", hostname, base_path)
+    } else {
+        format!("https://{}:{}{}", hostname, FUNNEL_PUBLIC_PORT, base_path)
+    };
     Ok(TunnelHandle {
-        url: format!("https://{}", hostname),
+        url: public_url,
         kind: TunnelKind::TailscaleFunnel,
         proc: None,
+        funnel_path: Some(base_path.to_string()),
     })
+}
+
+/// Returns the existing proxy target if `tailscale funnel status --json`
+/// already has a handler at the given path on the given public port.
+async fn funnel_path_in_use(public_port: u16, base_path: &str) -> Option<String> {
+    let out = Command::new("tailscale")
+        .args(["funnel", "status", "--json"])
+        .output()
+        .await
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).ok()?;
+    let web = v.get("Web")?.as_object()?;
+    for (host_port, cfg) in web {
+        if !host_port.ends_with(&format!(":{}", public_port)) {
+            continue;
+        }
+        let handlers = cfg.get("Handlers").and_then(|h| h.as_object())?;
+        if let Some(h) = handlers.get(base_path) {
+            return Some(
+                h.get("Proxy")
+                    .and_then(|p| p.as_str())
+                    .unwrap_or("(unknown)")
+                    .to_string(),
+            );
+        }
+    }
+    None
 }
 
 async fn get_tailscale_hostname() -> Result<String, String> {

@@ -168,12 +168,28 @@ async fn run(opts: CliOptions) -> Result<(), String> {
 
     let token = load_or_create_token(opts.rotate_token, opts.token.clone())
         .map_err(|e| format!("token: {}", e))?;
-    let manifest_json = build_manifest(&root_name);
 
     if opts.tunnel && opts.funnel {
         eprintln!("[treepeek] --tunnel and --funnel are mutually exclusive");
         std::process::exit(2);
     }
+
+    // Funnel mode mounts the app at /<slug> so several treepeek instances on
+    // the same tailnet node can coexist on port 443 via `tailscale funnel
+    // --set-path`. Empty in every other mode means "serve at site root".
+    let base_path: String = if opts.funnel {
+        let slug = sanitize_base_slug(&root_name);
+        if slug.is_empty() {
+            return Err(format!(
+                "cannot derive a URL slug from directory name {:?}; rename or run without --funnel",
+                root_name
+            ));
+        }
+        format!("/{}", slug)
+    } else {
+        String::new()
+    };
+    let manifest_json = build_manifest(&root_name, &base_path);
 
     let mut bind = opts.bind.clone();
     let mut bind_reason = "explicit".to_string();
@@ -248,6 +264,7 @@ async fn run(opts: CliOptions) -> Result<(), String> {
         token.clone(),
         auth_required,
         manifest_json,
+        base_path.clone(),
         history_store.clone(),
         device_store.clone(),
         push_manager.clone(),
@@ -320,6 +337,7 @@ async fn run(opts: CliOptions) -> Result<(), String> {
         display_root: display_root.clone(),
         pid: std::process::id(),
         started_at: chrono::Utc::now().timestamp_millis(),
+        base_path: base_path.clone(),
     });
 
     let watcher_state = state.clone();
@@ -342,9 +360,11 @@ async fn run(opts: CliOptions) -> Result<(), String> {
                 .await;
             if vapid_present && push.has_subscriptions().await {
                 let body = describe_changes(&changed);
+                // Relative to the SW's registration scope so the same payload
+                // works at site root or under a funnel mount.
                 let url = match changed.first() {
-                    Some(f) => format!("/?file={}", urlencode(f)),
-                    None => "/".to_string(),
+                    Some(f) => format!("?file={}", urlencode(f)),
+                    None => "./".to_string(),
                 };
                 let title = format!("treepeek · {}", root_name);
                 let file_first = changed.first().map(|s| s.as_str());
@@ -406,8 +426,9 @@ async fn run(opts: CliOptions) -> Result<(), String> {
         println!();
         println!("  treepeek  {}", root_name);
         println!("  bind:     {}:{}  ({})", bind, bound_port, bind_reason);
+        println!("  path:     {}", base_path);
         println!("  funnel:   configuring tailscale funnel ...");
-        match start_tailscale_funnel(bound_port).await {
+        match start_tailscale_funnel(bound_port, &base_path).await {
             Ok(t) => {
                 share_url = format!("{}/?k={}", t.url, token);
                 origin_label = format!("{}  (Tailscale Funnel)", t.url);
@@ -511,7 +532,16 @@ fn init_passkey_service(origin_url: &str) -> Result<PasskeyService, String> {
         .host_str()
         .ok_or_else(|| "origin url missing host".to_string())?
         .to_string();
-    PasskeyService::new(&rp_id, &parsed).map_err(|e| format!("webauthn init: {}", e))
+    // WebAuthn rp_origin must match window.location.origin (scheme://host[:port])
+    // exactly, without any path component.
+    let origin_only = {
+        let mut u = parsed.clone();
+        u.set_path("");
+        u.set_query(None);
+        u.set_fragment(None);
+        u
+    };
+    PasskeyService::new(&rp_id, &origin_only).map_err(|e| format!("webauthn init: {}", e))
 }
 
 fn describe_changes(rel: &[String]) -> String {
@@ -530,4 +560,24 @@ fn describe_changes(rel: &[String]) -> String {
 fn urlencode(s: &str) -> String {
     use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
     utf8_percent_encode(s, NON_ALPHANUMERIC).to_string()
+}
+
+fn sanitize_base_slug(name: &str) -> String {
+    let mut out = String::new();
+    let mut last_hyphen = false;
+    for raw in name.chars() {
+        for c in raw.to_lowercase() {
+            if c.is_ascii_alphanumeric() {
+                out.push(c);
+                last_hyphen = false;
+            } else if !out.is_empty() && !last_hyphen {
+                out.push('-');
+                last_hyphen = true;
+            }
+        }
+    }
+    while out.ends_with('-') {
+        out.pop();
+    }
+    out
 }

@@ -49,6 +49,10 @@ pub struct AppState {
     pub token: String,
     pub auth_required: bool,
     pub manifest_json: String,
+    /// Empty when serving at site root, otherwise a leading-slash prefix like
+    /// "/treepeek" that funnel mode mounts the app under (so multiple instances
+    /// can share port 443 via tailscale funnel --set-path).
+    pub base_path: String,
     pub history_store: Arc<HistoryStore>,
     pub device_store: Arc<DeviceStore>,
     pub passkey: tokio::sync::OnceCell<Arc<PasskeyService>>,
@@ -71,6 +75,7 @@ impl AppState {
         token: String,
         auth_required: bool,
         manifest_json: String,
+        base_path: String,
         history_store: Arc<HistoryStore>,
         device_store: Arc<DeviceStore>,
         push_manager: Arc<PushManager>,
@@ -86,6 +91,7 @@ impl AppState {
             token,
             auth_required,
             manifest_json,
+            base_path,
             history_store,
             device_store,
             passkey: tokio::sync::OnceCell::new(),
@@ -160,7 +166,8 @@ impl AppState {
 }
 
 pub fn build_router(state: SharedState) -> Router {
-    Router::new()
+    let base_path = state.base_path.clone();
+    let inner = Router::new()
         .route("/ws", get(ws_handler))
         .route("/api/auth/register/start", post(auth_register_start))
         .route("/api/auth/register/finish", post(auth_register_finish))
@@ -171,7 +178,57 @@ pub fn build_router(state: SharedState) -> Router {
         .route("/api/devices", get(list_devices))
         .route("/api/devices/:id", delete(delete_device))
         .fallback(catch_all)
-        .with_state(state)
+        .with_state(state);
+    if base_path.is_empty() {
+        return inner;
+    }
+    // Strip the funnel prefix BEFORE the router sees the URI. We use a global
+    // `from_fn` wrapper at the outer router level: when applied around a
+    // Router-with-fallback, the middleware modifies `req.uri()` first, then
+    // the router routes against the stripped path. (`.layer()` on the inner
+    // router runs after axum has already picked a route, which is too late.)
+    //
+    // Hitting the prefix with no trailing slash returns a 308 so the SPA's
+    // relative URLs resolve against `<prefix>/`, not the parent.
+    Router::new().fallback_service(inner).layer(
+        axum::middleware::from_fn(move |req: Request<Body>, next: axum::middleware::Next| {
+            let bp = base_path.clone();
+            async move {
+                let uri = req.uri().clone();
+                let path = uri.path();
+                if path == bp {
+                    let location = match uri.query() {
+                        Some(q) => format!("{}/?{}", bp, q),
+                        None => format!("{}/", bp),
+                    };
+                    return Response::builder()
+                        .status(StatusCode::PERMANENT_REDIRECT)
+                        .header(header::LOCATION, location)
+                        .body(Body::empty())
+                        .unwrap();
+                }
+                let stripped: Option<String> =
+                    if let Some(rest) = path.strip_prefix(&format!("{}/", bp)) {
+                        Some(format!("/{}", rest))
+                    } else {
+                        None
+                    };
+                let mut req = req;
+                if let Some(new_path) = stripped {
+                    let pq = match uri.query() {
+                        Some(q) => format!("{}?{}", new_path, q),
+                        None => new_path,
+                    };
+                    let mut parts = uri.into_parts();
+                    parts.path_and_query = pq.parse().ok();
+                    if let Ok(new_uri) = http::Uri::from_parts(parts) {
+                        *req.uri_mut() = new_uri;
+                    }
+                }
+                next.run(req).await
+            }
+        }),
+    )
 }
 
 async fn ws_handler(
@@ -193,7 +250,7 @@ async fn ws_handler(
             let token = state.token.clone();
             return ws.on_upgrade(move |socket| async move {
                 if let Some(peer) = peer {
-                    proxy_ws(socket, peer.host, peer.port, token).await;
+                    proxy_ws(socket, peer.host, peer.port, peer.base_path, token).await;
                 }
             });
         }
@@ -225,9 +282,16 @@ async fn handle_local_ws(socket: WebSocket, state: SharedState) {
     send_task.abort();
 }
 
-async fn proxy_ws(client: WebSocket, host: String, port: u16, token: String) {
+async fn proxy_ws(
+    client: WebSocket,
+    host: String,
+    port: u16,
+    peer_base_path: String,
+    token: String,
+) {
     use tokio_tungstenite::tungstenite::client::IntoClientRequest;
-    let url = format!("ws://{}:{}/ws", host, port);
+    // Peers running under a funnel mount expose /<base>/ws, not /ws.
+    let url = format!("ws://{}:{}{}/ws", host, port, peer_base_path);
     let mut req = match url.into_client_request() {
         Ok(r) => r,
         Err(_) => return,
@@ -812,7 +876,11 @@ async fn proxy_http(
         .path_and_query()
         .map(|p| p.as_str().to_string())
         .unwrap_or_else(|| path.to_string());
-    let upstream_url = format!("http://{}:{}{}", peer.host, peer.port, pq);
+    // Peer running under a funnel mount exposes routes under its base prefix.
+    let upstream_url = format!(
+        "http://{}:{}{}{}",
+        peer.host, peer.port, peer.base_path, pq
+    );
     let url: hyper::Uri = match upstream_url.parse() {
         Ok(u) => u,
         Err(_) => {
